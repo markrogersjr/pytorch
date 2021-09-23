@@ -16,6 +16,7 @@ import warnings
 import threading
 from typing import List, Optional, Tuple, Union, Any
 from ._utils import _get_device_index, _dummy_type
+from .._utils import classproperty
 from .graphs import CUDAGraph, graph_pool_handle, graph, make_graphed_callables
 from .streams import Stream, Event
 from .. import device as _device
@@ -584,15 +585,16 @@ from .random import *  # noqa: F403
 from ..storage import _StorageBase
 
 
-if not hasattr(torch._C, 'CudaDoubleStorageBase'):
+if not hasattr(torch._C, 'CudaByteStorageBase'):
     # Define dummy base classes
     for t in ['Double', 'Float', 'Long', 'Int', 'Short', 'Char', 'Byte', 'Half', 'Bool', 'BFloat16',
               'ComplexDouble', 'ComplexFloat']:
-        storage_name = 'Cuda{0}StorageBase'.format(t)
         tensor_name = 'Cuda{0}TensorBase'.format(t)
 
-        torch._C.__dict__[storage_name] = _dummy_type(storage_name)
         torch._C.__dict__[tensor_name] = _dummy_type(tensor_name)
+
+    storage_name = 'CudaByteStorageBase'
+    torch._C.__dict__[storage_name] = _dummy_type(storage_name)
 
     torch._C.__dict__['_CudaStreamBase'] = _dummy_type('CudaStreamBase')
     torch._C.__dict__['_CudaEventBase'] = _dummy_type('CudaEventBase')
@@ -619,52 +621,65 @@ class _CudaBase(object):
 
     __new__ = _lazy_new
 
-
-class DoubleStorage(_CudaBase, torch._C.CudaDoubleStorageBase, _StorageBase):
-    pass
-
-
-class FloatStorage(_CudaBase, torch._C.CudaFloatStorageBase, _StorageBase):
-    pass
-
-
-class LongStorage(_CudaBase, torch._C.CudaLongStorageBase, _StorageBase):
-    pass
-
-
-class IntStorage(_CudaBase, torch._C.CudaIntStorageBase, _StorageBase):
-    pass
-
-
-class ShortStorage(_CudaBase, torch._C.CudaShortStorageBase, _StorageBase):
-    pass
-
-
-class CharStorage(_CudaBase, torch._C.CudaCharStorageBase, _StorageBase):
-    pass
-
+from torch.storage import TypedStorage
 
 class ByteStorage(_CudaBase, torch._C.CudaByteStorageBase, _StorageBase):
     pass
 
+class DoubleStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.double
 
-class HalfStorage(_CudaBase, torch._C.CudaHalfStorageBase, _StorageBase):
-    pass
+class FloatStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.float
 
+class HalfStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.half
 
-class BoolStorage(_CudaBase, torch._C.CudaBoolStorageBase, _StorageBase):
-    pass
+class LongStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.long
 
+class IntStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.int
 
-class BFloat16Storage(_CudaBase, torch._C.CudaBFloat16StorageBase, _StorageBase):
-    pass
+class ShortStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.short
 
-class ComplexDoubleStorage(_CudaBase, torch._C.CudaComplexDoubleStorageBase, _StorageBase):
-    pass
+class CharStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.int8
 
+class BoolStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.bool
 
-class ComplexFloatStorage(_CudaBase, torch._C.CudaComplexFloatStorageBase, _StorageBase):
-    pass
+class BFloat16Storage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.bfloat16
+
+class ComplexDoubleStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.cdouble
+
+class ComplexFloatStorage(TypedStorage):
+    @classproperty
+    def dtype(self):
+        return torch.cfloat
 
 torch._storage_classes.add(DoubleStorage)
 torch._storage_classes.add(FloatStorage)

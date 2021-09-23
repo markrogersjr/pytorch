@@ -8,17 +8,9 @@
 #endif  // !CAFFE2_USE_LITE_PROTO
 
 #include <c10/util/Logging.h>
-#include <c10/util/string_view.h>
 
 #include "caffe2/utils/proto_wrap.h"
 #include "caffe2/proto/caffe2_pb.h"
-
-#ifndef C10_ANDROID
-#define CAFFE2_ENABLE_REDUCED_STRINGS_IN_ARGUMENT_LOOKUP
-#define CAFFE2_ARG_MAP_FIND(map, key) map.find(key)
-#else
-#define CAFFE2_ARG_MAP_FIND(map, key) map.find(std::string(key))
-#endif
 
 namespace caffe2 {
 
@@ -212,40 +204,40 @@ TORCH_API bool HasInput(const OperatorDef& op, const std::string& input);
 class C10_EXPORT ArgumentHelper {
  public:
   template <typename Def>
-  static bool HasArgument(const Def& def, c10::string_view name) {
+  static bool HasArgument(const Def& def, const string& name) {
     return ArgumentHelper(def).HasArgument(name);
   }
 
   template <typename Def, typename T>
   static T GetSingleArgument(
       const Def& def,
-      c10::string_view name,
+      const string& name,
       const T& default_value) {
     return ArgumentHelper(def).GetSingleArgument<T>(name, default_value);
   }
 
   template <typename Def, typename T>
-  static bool HasSingleArgumentOfType(const Def& def, c10::string_view name) {
+  static bool HasSingleArgumentOfType(const Def& def, const string& name) {
     return ArgumentHelper(def).HasSingleArgumentOfType<T>(name);
   }
 
   template <typename Def, typename T>
   static std::vector<T> GetRepeatedArgument(
       const Def& def,
-      c10::string_view name,
+      const string& name,
       const std::vector<T>& default_value = std::vector<T>()) {
     return ArgumentHelper(def).GetRepeatedArgument<T>(name, default_value);
   }
 
   template <typename Def, typename MessageType>
-  static MessageType GetMessageArgument(const Def& def, c10::string_view name) {
+  static MessageType GetMessageArgument(const Def& def, const string& name) {
     return ArgumentHelper(def).GetMessageArgument<MessageType>(name);
   }
 
   template <typename Def, typename MessageType>
   static std::vector<MessageType> GetRepeatedMessageArgument(
       const Def& def,
-      c10::string_view name) {
+      const string& name) {
     return ArgumentHelper(def).GetRepeatedMessageArgument<MessageType>(name);
   }
 
@@ -263,25 +255,24 @@ class C10_EXPORT ArgumentHelper {
 
   explicit ArgumentHelper(const OperatorDef& def);
   explicit ArgumentHelper(const NetDef& netdef);
-  bool HasArgument(c10::string_view name) const;
+  bool HasArgument(const string& name) const;
 
   template <typename T>
-  T GetSingleArgument(c10::string_view name, const T& default_value) const;
+  T GetSingleArgument(const string& name, const T& default_value) const;
   template <typename T>
-  bool HasSingleArgumentOfType(c10::string_view name) const;
+  bool HasSingleArgumentOfType(const string& name) const;
   template <typename T>
   std::vector<T> GetRepeatedArgument(
-      c10::string_view name,
+      const string& name,
       const std::vector<T>& default_value = std::vector<T>()) const;
 
   template <typename MessageType>
-  MessageType GetMessageArgument(c10::string_view name) const {
-    auto it = CAFFE2_ARG_MAP_FIND(arg_map_, name);
-    CAFFE_ENFORCE(it != arg_map_.end(), "Cannot find parameter named ", name);
+  MessageType GetMessageArgument(const string& name) const {
+    CAFFE_ENFORCE(arg_map_.count(name), "Cannot find parameter named ", name);
     MessageType message;
-    if (it->second.has_s()) {
+    if (arg_map_.at(name).has_s()) {
       CAFFE_ENFORCE(
-          message.ParseFromString(it->second.s()),
+          message.ParseFromString(arg_map_.at(name).s()),
           "Failed to parse content from the string");
     } else {
       VLOG(1) << "Return empty message for parameter " << name;
@@ -290,47 +281,42 @@ class C10_EXPORT ArgumentHelper {
   }
 
   template <typename MessageType>
-  std::vector<MessageType> GetRepeatedMessageArgument(c10::string_view name) const {
-    auto it = CAFFE2_ARG_MAP_FIND(arg_map_, name);
-    CAFFE_ENFORCE(it != arg_map_.end(), "Cannot find parameter named ", name);
-    std::vector<MessageType> messages(it->second.strings_size());
+  std::vector<MessageType> GetRepeatedMessageArgument(const string& name) const {
+    CAFFE_ENFORCE(arg_map_.count(name), "Cannot find parameter named ", name);
+    std::vector<MessageType> messages(arg_map_.at(name).strings_size());
     for (int i = 0; i < messages.size(); ++i) {
       CAFFE_ENFORCE(
-          messages[i].ParseFromString(it->second.strings(i)),
+          messages[i].ParseFromString(arg_map_.at(name).strings(i)),
           "Failed to parse content from the string");
     }
     return messages;
   }
 
  private:
-  std::map<string, Argument
-#ifdef CAFFE2_ENABLE_REDUCED_STRINGS_IN_ARGUMENT_LOOKUP
-  , std::less<>
-#endif
-  > arg_map_;
+  std::map<string, Argument> arg_map_;
 };
 
 // **** Arguments Utils *****
 
 // Helper methods to get an argument from OperatorDef or NetDef given argument
 // name. Throws if argument does not exist.
-TORCH_API const Argument& GetArgument(const OperatorDef& def, c10::string_view name);
-TORCH_API const Argument& GetArgument(const NetDef& def, c10::string_view name);
+TORCH_API const Argument& GetArgument(const OperatorDef& def, const string& name);
+TORCH_API const Argument& GetArgument(const NetDef& def, const string& name);
 // Helper methods to get an argument from OperatorDef or NetDef given argument
 // name. Returns nullptr if argument does not exist.
-TORCH_API const Argument* GetArgumentPtr(const OperatorDef& def, c10::string_view name);
-TORCH_API const Argument* GetArgumentPtr(const NetDef& def, c10::string_view name);
+TORCH_API const Argument* GetArgumentPtr(const OperatorDef& def, const string& name);
+TORCH_API const Argument* GetArgumentPtr(const NetDef& def, const string& name);
 
 // Helper methods to query a boolean argument flag from OperatorDef or NetDef
 // given argument name. If argument does not exist, return default value.
 // Throws if argument exists but the type is not boolean.
 TORCH_API bool GetFlagArgument(
     const OperatorDef& def,
-    c10::string_view name,
+    const string& name,
     bool default_value = false);
 TORCH_API bool GetFlagArgument(
     const NetDef& def,
-    c10::string_view name,
+    const string& name,
     bool default_value = false);
 
 TORCH_API Argument* GetMutableArgument(

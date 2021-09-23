@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 
 from torch.testing._internal.common_quantization import QuantizationTestCase
-from torch.ao.quantization.fuse_modules import fuse_modules
+from torch.quantization.fuse_modules import fuse_modules
 
-import torch.ao.quantization._equalize as _equalize
+import torch.quantization._equalize as _equalize
 
 import copy
 

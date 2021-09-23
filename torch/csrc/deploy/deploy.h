@@ -232,10 +232,6 @@ class PythonMethodWrapper : public torch::IMethod {
       std::string method_name)
       : model_(std::move(model)), method_name_(std::move(method_name)) {}
 
-  const std::string& name() const override {
-    return method_name_;
-  }
-
   c10::IValue operator()(
       std::vector<c10::IValue> args,
       const IValueMap& kwargs = IValueMap()) const override {

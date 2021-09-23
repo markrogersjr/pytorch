@@ -252,13 +252,6 @@ public:
    */
   std::vector<OperatorHandle> findDanglingImpls() const;
 
-  /**
-   * Useful for inspecting global Dispatcher registration state.
-   * Returns the names of all operators with a kernel registered for the specified DispatchKey.
-   * If no DispatchKey is specified, it returns all registered operators.
-   */
-  std::vector<OperatorName> getRegistrationsForDispatchKey(c10::optional<DispatchKey> k) const;
-
 private:
   Dispatcher();
 
@@ -275,7 +268,7 @@ private:
     const OperatorHandle& op,
     const OperatorName& op_name,
     c10::optional<DispatchKey> dispatch_key,
-    impl::OperatorEntry::AnnotatedKernelContainerIterator kernel_handle);
+    std::list<impl::AnnotatedKernel>::iterator kernel_handle);
   void deregisterName_(const OperatorHandle& op, const OperatorName& op_name);
   void deregisterFallback_(DispatchKey dispatchKey);
   void deregisterLibrary_(const std::string& ns);
@@ -325,11 +318,6 @@ public:
     return operatorDef_->op.dumpState();
   }
 
-  bool hasKernelForDispatchKey(DispatchKey k) const {
-    return operatorDef_->op.hasKernelForDispatchKey(k);
-  }
-
-
   std::string dumpComputedTable() const {
     return operatorDef_->op.dumpComputedTable();
   }
@@ -354,10 +342,6 @@ public:
 
   void callBoxed(Stack* stack) const {
     c10::Dispatcher::singleton().callBoxed(*this, stack);
-  }
-
-  void callBoxed(Stack& stack) const {
-    callBoxed(&stack);
   }
 
   void redispatchBoxed(DispatchKeySet ks, Stack* stack) const {

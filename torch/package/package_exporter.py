@@ -26,7 +26,7 @@ from torch.utils.hooks import RemovableHandle
 
 from ._digraph import DiGraph
 from ._importlib import _normalize_path
-from ._mangling import demangle, is_mangled
+from ._mangling import is_mangled
 from ._package_pickler import create_pickler
 from ._stdlib import is_stdlib_module
 from .find_file_dependencies import find_files_source_depends_on
@@ -53,10 +53,6 @@ class _ModuleProviderAction(Enum):
     # we may encounter a `_mock` module from the original package. If we do,
     # just ignore it and write a `_mock` module once.
     REPACKAGED_MOCK_MODULE = 5
-    # Special case: PackageImporter adds a fake module
-    # (`torch_package_importer`) that allows packaged code to access it. Don't
-    # re-export this.
-    SKIP = 6
 
 
 class PackagingErrorReason(Enum):
@@ -391,8 +387,8 @@ class PackageExporter:
             if not is_mangled(module_name):
                 raise
             msg = (
-                f"Module not found: '{module_name}'. Make sure the PackageImporter that "
-                "created this module is present in `self.importer`"
+                f"Module not found: '{module_name}'. Modules imported "
+                "from a torch.package cannot be re-exported directly."
             )
             raise ModuleNotFoundError(msg) from None
 
@@ -424,17 +420,6 @@ class PackageExporter:
             module_name in self.dependency_graph
             and self.dependency_graph.nodes[module_name].get("provided") is True
         ):
-            return
-
-        # Special case: PackageImporter provides a special module called
-        # `torch_package_importer` that allows packaged modules to reference
-        # their PackageImporter. We don't want to re-export this.
-        if module_name == "torch_package_importer":
-            self.dependency_graph.add_node(
-                module_name,
-                action=_ModuleProviderAction.SKIP,
-                provided=True,
-            )
             return
 
         if module_name == "_mock":
@@ -489,6 +474,10 @@ class PackageExporter:
                 "save_module() expects a string input, did you perhaps mean to pass `__name__`?"
             )
 
+        self.dependency_graph.add_node(
+            module_name,
+            provided=True,
+        )
         self._intern_module(module_name, dependencies)
 
     def _intern_module(
@@ -500,13 +489,6 @@ class PackageExporter:
         along with any metadata needed to write it out to the zipfile at serialization time.
         """
         module_obj = self._import_module(module_name)
-        # Subtle: if the import above succeeded, either:
-        #   1. The module name is not mangled, and this was just a regular import, or
-        #   2. The module name is mangled, but one of the importers was able to
-        #      recognize the mangling and import it.
-        # Either way, it is now safe to demangle this name so that we don't
-        # serialize the mangled version to the package.
-        module_name = demangle(module_name)
 
         # Find dependencies of this module and require them as well.
         is_package = hasattr(module_obj, "__path__")
@@ -529,7 +511,6 @@ class PackageExporter:
                 is_package=is_package,
                 error=packaging_error,
                 error_context=error_context,
-                provided=True,
             )
             return
 
@@ -880,6 +861,7 @@ class PackageExporter:
         self._validate_dependency_graph()
 
         extern_modules = []
+        _mock_written = False
         for module_name, attrs in self.dependency_graph.nodes.items():
             action = attrs["action"]
 
@@ -919,8 +901,7 @@ class PackageExporter:
 
             elif action == _ModuleProviderAction.REPACKAGED_MOCK_MODULE:
                 self._write_mock_file()
-            elif action == _ModuleProviderAction.SKIP:
-                continue
+
             else:
                 raise AssertionError(
                     f"Invalid action: {module_name}, {action}. Please report a bug to PyTorch."

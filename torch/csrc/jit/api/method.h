@@ -46,7 +46,7 @@ struct TORCH_API Method : public torch::IMethod {
     return function_->graph();
   }
 
-  const std::string& name() const override {
+  const std::string& name() const {
     return function_->name();
   }
 

@@ -4,7 +4,6 @@ from torch.onnx.symbolic_helper import parse_args, _parse_arg, _unimplemented
 from torch.onnx.utils import _add_block, _add_input_to_block, _add_output_to_block
 from sys import maxsize
 from torch.onnx.symbolic_opset9 import permute, _reshape_from_tensor
-import warnings
 
 
 # EDITING THIS FILE? READ THIS FIRST!
@@ -26,12 +25,11 @@ def outer(g, input, other):
 
 @parse_args("v", "f", "i")
 def dropout(g, input, p, train):
-    sym_help.check_training_mode(train, "dropout")
+    sym_help.assert_training_mode(train, "dropout")
     # in eval mode, dropout is non-op - if the node's train param is set to False, dropout is non-op
-    if not train:
+    if not sym_help._training_mode:
         return input
-    warnings.warn("Dropout is a training op and should not be exported in inference mode. "
-                  "For inference, make sure to call eval() on the model and to export it with param training=False.")
+
     p = g.op("Constant", value_t=torch.tensor(p))
     t = g.op("Constant", value_t=torch.tensor(True))
     r, _ = g.op("Dropout", input, p, t, outputs=2)
@@ -65,17 +63,13 @@ def nll_loss_nd(g, self, target, weight, reduction, ignore_index):
     return nll_loss(g, self, target, weight, reduction, ignore_index)
 
 
-def cross_entropy_loss(g, self, target, weight, reduction, ignore_index, label_smoothing):
+def cross_entropy_loss(g, self, target, weight, reduction, ignore_index):
     # none reduction : onnx::Constant[value={0}]
     # mean reduction : onnx::Constant[value={1}]
     # sum reduction : onnx::Constant[value={2}]
     reduction = sym_help._maybe_get_const(reduction, "i")
     reduction_vals = ["none", "mean", "sum"]
     reduction = reduction_vals[reduction]
-
-    label_smoothing = sym_help._maybe_get_const(label_smoothing, "f")
-    if label_smoothing > 0.0:
-        raise RuntimeError("Unsupported: ONNX does not support label_smoothing")
 
     # in onnx SoftmaxCrossEntropyLoss specification, ignore_index is optional without default value.
     # therefore we need to set ignore_index attribute even if it is not specified (e.g. ignore_index=-100).
@@ -129,7 +123,8 @@ def celu(g, self, alpha):
 
 def argmax(g, input, dim, keepdim):
     if sym_help._is_none(dim):
-        flattened = sym_help._reshape_helper(g, input, g.op("Constant", value_t=torch.tensor([-1])))
+        from torch.onnx.symbolic_opset9 import reshape
+        flattened = reshape(g, input, g.op("Constant", value_t=torch.tensor([-1])))
         return g.op("ArgMax", flattened, axis_i=0, keepdims_i=False, select_last_index_i=False)
     else:
         dim = _parse_arg(dim, "i")
@@ -139,7 +134,8 @@ def argmax(g, input, dim, keepdim):
 
 def argmin(g, input, dim, keepdim):
     if sym_help._is_none(dim):
-        flattened = sym_help._reshape_helper(g, input, g.op("Constant", value_t=torch.tensor([-1])))
+        from torch.onnx.symbolic_opset9 import reshape
+        flattened = reshape(g, input, g.op("Constant", value_t=torch.tensor([-1])))
         return g.op("ArgMin", flattened, axis_i=0, keepdims_i=False, select_last_index_i=False)
     else:
         dim = _parse_arg(dim, "i")

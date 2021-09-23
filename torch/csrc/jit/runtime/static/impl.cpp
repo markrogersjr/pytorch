@@ -9,21 +9,15 @@
 #include <caffe2/core/timer.h>
 #include <torch/csrc/jit/ir/alias_analysis.h>
 #include <torch/csrc/jit/passes/canonicalize.h>
+#include <torch/csrc/jit/passes/concat_opt.h>
 #include <torch/csrc/jit/passes/dead_code_elimination.h>
 #include <torch/csrc/jit/passes/freeze_module.h>
 #include <torch/csrc/jit/passes/remove_mutation.h>
 #include <torch/csrc/jit/passes/subgraph_rewrite.h>
-#include <torch/csrc/jit/passes/variadic_ops.h>
-#include <torch/csrc/jit/runtime/static/memory_planner.h>
 #include <torch/csrc/jit/runtime/static/ops.h>
 #include <torch/csrc/jit/runtime/static/passes.h>
 #include <torch/csrc/jit/runtime/vararg_functions.h>
 #include <stdexcept>
-
-#ifdef FBCODE_CAFFE2
-#include <folly/dynamic.h>
-#include <folly/json.h>
-#endif
 
 namespace torch {
 namespace jit {
@@ -72,10 +66,6 @@ void OptimizeGraph(
   EliminateDeadCode(graph);
   FuseInferenceOpsForSparseNN(graph);
   UseVariadicCat(graph);
-  UseVariadicStack(graph);
-  if (opts.enable_out_variant) {
-    FuseSignLog1P(graph);
-  }
 
   // TODO: we can avoid this guard by moving operations
   // to exposed folders.
@@ -83,12 +73,9 @@ void OptimizeGraph(
   if (opts.enable_out_variant) {
     FuseListUnpack(graph);
     ReplaceWithCopy(graph);
-    EnableStaticRuntimeLayerNorm(graph);
   }
 #endif
   ConstantPropagation(graph);
-  RemoveImmutableInputDictLookups(graph);
-  UseVariadicTupleUnpack(graph);
 }
 
 // remove unused input 0 from graph
@@ -116,8 +103,8 @@ bool mayContainAlias(AliasDb& db, const Value* a, const Value* b) {
 
 bool mayContainAlias(
     AliasDb& db,
-    const FastSet<const Value*>& a,
-    const FastSet<const Value*>& b) {
+    const std::unordered_set<const Value*>& a,
+    const std::unordered_set<const Value*>& b) {
   std::vector<Value*> as;
   std::vector<Value*> bs;
   as.reserve(a.size());
@@ -134,11 +121,11 @@ bool mayContainAlias(
 }
 
 // Get set of all inputs/outputs/constants (always alive) and their aliases
-FastSet<const Value*> GetAlwaysAliveValues(
+std::unordered_set<const Value*> GetAlwaysAliveValues(
     const std::shared_ptr<torch::jit::Graph>& graph,
     AliasDb& db) {
   // a set of Values whose live-range exceed current inference
-  FastSet<const Value*> always_alive;
+  std::unordered_set<const Value*> always_alive;
 
   // mark inputs, constants, outputs as always_alive
   for (const auto* input : graph->inputs()) {
@@ -160,7 +147,7 @@ FastSet<const Value*> GetAlwaysAliveValues(
     // constants are already in the always_alive set
     if (node->kind() != prim::Constant) {
       for (const auto* v : node->outputs()) {
-        if (mayContainAlias(db, {v}, always_alive)) {
+        if (mayContainAlias(db, ValueSet{v}, always_alive)) {
           always_alive.insert(v);
         }
       }
@@ -170,26 +157,25 @@ FastSet<const Value*> GetAlwaysAliveValues(
 }
 
 //  Map each value to all values that are alive at the same time.
-using LivenessMap = FastMap<const Value*, FastSet<const Value*>>;
+using LivenessMap = std::unordered_map<const Value*, std::set<const Value*>>;
 
 //  The algorithm does a traversal of the execution graph
 //  while keeping track of the live values.
 LivenessMap GetLivenessMap(
     const std::shared_ptr<torch::jit::Graph>& graph,
-    const FastSet<const Value*>& always_alive,
+    const std::unordered_set<const Value*>& always_alive,
     AliasDb& db) {
   // map a Value to a set of Values that overlap live-ranges with the Value's
-  FastMap<const Value*, FastSet<const Value*>> liveness_map;
+  std::unordered_map<const Value*, std::set<const Value*>> liveness_map;
 
   // map Values to its creation order in graph (Note: only traverse top-level
   // nodes such that nodes under control-flows are represented by top-level
   // block nodes)
   std::vector<const Value*> values_in_creation_order;
-  FastMap<const Value*, size_t> values_to_idx_in_creation_order;
+  std::unordered_map<const Value*, size_t> values_to_idx_in_creation_order;
   for (const auto* node : graph->nodes()) {
     for (const auto* v : node->outputs()) {
-      values_to_idx_in_creation_order.emplace(
-          v, values_in_creation_order.size());
+      values_to_idx_in_creation_order[v] = values_in_creation_order.size();
       values_in_creation_order.emplace_back(v);
     }
   }
@@ -197,21 +183,20 @@ LivenessMap GetLivenessMap(
   // presence of a Value in live_values_use_chain means the Value alive
   // Value mapped to set of Nodes that may use the Value (i.e., use-chain of
   // Value)
-  FastMap<const Value*, FastSet<const Node*>> live_values_use_chain;
+  std::unordered_map<const Value*, std::set<const Node*>> live_values_use_chain;
   // Node mapped to set of Values that the Node may use (i.e., def-chain of node
   // inputs)
-  FastMap<const Node*, FastSet<const Value*>> live_nodes_def_chain;
+  std::unordered_map<const Node*, std::set<const Value*>> live_nodes_def_chain;
 
   // add v to the current liveness_map
   std::function<void(const Value* v)> add_live_value_fn = [&](const Value* v) {
     if (liveness_map.count(v)) {
       return;
     }
-
-    auto& v_live_set = liveness_map[v] = {};
+    liveness_map[v] = {};
 
     for (const auto& live_v : live_values_use_chain) {
-      v_live_set.insert(live_v.first);
+      liveness_map.at(v).insert(live_v.first);
       liveness_map.at(live_v.first).insert(v);
     }
 
@@ -290,47 +275,18 @@ LivenessMap GetLivenessMap(
   }
 
   for (const auto* node : graph->nodes()) {
-    auto inputs = node->inputs();
-    auto outputs = node->outputs();
-    for (const auto* input : inputs) {
-      for (const auto* output : outputs) {
-        auto input_it = liveness_map.find(input);
-        if (input_it == liveness_map.end()) {
-          continue;
+    for (const auto* input : node->inputs()) {
+      for (const auto* output : node->outputs()) {
+        if (liveness_map.count(input) && liveness_map.count(output)) {
+          liveness_map.at(input).insert(output);
+          liveness_map.at(output).insert(input);
         }
-        auto output_it = liveness_map.find(output);
-        if (output_it == liveness_map.end()) {
-          continue;
-        }
-        input_it->second.insert(output);
-        output_it->second.insert(input);
       }
     }
-    auto insert_all_pairs_in_liveness_map =
-        [&](at::ArrayRef<const Value*> values) {
-          for (size_t i = 0; !values.empty() && i < values.size() - 1; ++i) {
-            auto value_it = liveness_map.find(values[i]);
-            if (value_it == liveness_map.end()) {
-              continue;
-            }
-            for (size_t j = i + 1; j < values.size(); ++j) {
-              auto value2_it = liveness_map.find(values[j]);
-              if (value2_it != liveness_map.end()) {
-                value_it->second.insert(values[j]);
-                value2_it->second.insert(values[i]);
-              }
-            }
-          }
-        };
-    // All inputs should be alive at the same time.
-    insert_all_pairs_in_liveness_map(inputs);
-
-    // All outputs should be alive at the same time.
-    insert_all_pairs_in_liveness_map(outputs);
-  };
+  }
 
   return liveness_map;
-};
+}
 
 // Collect the set of Values that are candidates for memory planning:
 //   - Values that are used in in-place operators (i.e., _out variants), and
@@ -341,19 +297,16 @@ LivenessMap GetLivenessMap(
 //   first: Values that are candidates for memory planning
 //   second: A deterministc order of all values
 std::pair<std::vector<const Value*>, std::vector<const Value*>>
-GetMemoryPlanningCandidates(
-    const std::shared_ptr<torch::jit::Graph>& graph,
-    const FastMap<Node*, bool>& node_has_out_variant) {
+GetMemoryPlanningCandidates(const std::shared_ptr<torch::jit::Graph>& graph) {
   // for determinism
-  FastSet<const Value*> seen_values;
+  std::unordered_set<const Value*> seen_values;
   std::vector<const Value*> all_values;
-  FastSet<const Value*> can_reuse;
+  std::unordered_set<const Value*> can_reuse;
   // values used by unsupported ops (as either inputs or outputs)
   // these need to be removed from "can_reuse" after analyzing all nodes
-  FastSet<const Value*> cannot_reuse;
+  std::unordered_set<const Value*> cannot_reuse;
   for (auto* n : graph->nodes()) {
-    bool can_reuse_inputs_outputs =
-        canReuseInputsOutputs(n, node_has_out_variant);
+    bool can_reuse_inputs_outputs = canReuseInputsOutputs(n);
     for (const auto* v : n->inputs()) {
       if (!seen_values.count(v)) {
         all_values.emplace_back(v);
@@ -414,9 +367,10 @@ GetMemoryPlanningCandidates(
 //
 // NB: This is a deterministic implementation, which makes it easier to tune
 // and debug.
-FastMap<const Value*, std::vector<const Value*>> GenerateSameStorageValues(
+std::unordered_map<const Value*, std::vector<const Value*>>
+GenerateSameStorageValues(
     const LivenessMap& alive_during,
-    const FastSet<const Value*>& always_alive,
+    const std::unordered_set<const Value*>& always_alive,
     const std::pair<std::vector<const Value*>, std::vector<const Value*>>&
         optimizable,
     AliasDb& db) {
@@ -424,7 +378,8 @@ FastMap<const Value*, std::vector<const Value*>> GenerateSameStorageValues(
   const auto& all_values = optimizable.second;
 
   // map Value* to a set Value* that can share the same storage with it
-  FastMap<const Value*, std::vector<const Value*>> same_storage_values;
+  std::unordered_map<const Value*, std::vector<const Value*>>
+      same_storage_values;
 
   // make new_v and old_v map to the same storage (i.e., add to each other's
   // same_storage_values set)
@@ -433,7 +388,7 @@ FastMap<const Value*, std::vector<const Value*>> GenerateSameStorageValues(
       return;
     }
     DCHECK(same_storage_values.count(old_v));
-    FastSet<const Value*> seen;
+    std::set<const Value*> seen;
     std::vector<const Value*> values;
     for (auto* v : same_storage_values.at(old_v)) {
       if (seen.count(v)) {
@@ -479,10 +434,10 @@ FastMap<const Value*, std::vector<const Value*>> GenerateSameStorageValues(
 
   auto compute_liveset_fn =
       [&always_alive, &alive_during, &same_storage_values](
-          FastSet<const Value*>& live, const Value* v) {
+          std::set<const Value*>& live, const Value* v) {
         for (const auto* sv : same_storage_values.at(v)) {
           const auto& l = alive_during.count(sv) ? alive_during.at(sv)
-                                                 : FastSet<const Value*>{};
+                                                 : std::set<const Value*>{};
           live.insert(l.begin(), l.end());
         }
         live.insert(always_alive.begin(), always_alive.end());
@@ -490,7 +445,7 @@ FastMap<const Value*, std::vector<const Value*>> GenerateSameStorageValues(
 
   // check if same_storage_values[s] intersects with live
   auto intersect_fn = [&same_storage_values](
-                          FastSet<const Value*>& live, const Value* s) {
+                          std::set<const Value*>& live, const Value* s) {
     bool intersect = false;
     for (const auto* v : same_storage_values.at(s)) {
       if (live.count(v)) {
@@ -506,7 +461,7 @@ FastMap<const Value*, std::vector<const Value*>> GenerateSameStorageValues(
       continue;
     }
     // get values that are live during the lifetime of v
-    FastSet<const Value*> live;
+    std::set<const Value*> live;
     compute_liveset_fn(live, v);
     for (const auto* s : seen) {
       // if live(same_storage_values[v]) and same_storage_values[s]
@@ -573,7 +528,7 @@ PrepareForStaticModule(
 StaticModule::StaticModule(
     std::shared_ptr<torch::jit::Graph> g,
     const StaticModuleOptions& opts)
-    : StaticModule(PrepareForStaticModule(g->copy(), opts), opts) {}
+    : StaticModule(PrepareForStaticModule(g, opts), opts) {}
 
 StaticModule::StaticModule(
     const torch::jit::Module& m,
@@ -613,9 +568,9 @@ StaticModule::StaticModule(
   }
 
   // map Value* to IValue (from inputs or prim::Constant) or null
-  FastMap<Value*, IValue*> value_to_ivalue;
+  std::unordered_map<Value*, IValue*> value_to_ivalue;
   // map Value* to its SSA definition IR
-  FastMap<Value*, DefInfo> value_to_ssa_def;
+  std::unordered_map<Value*, DefInfo> value_to_ssa_def;
 
   // N inputs map to the first N entries in storage
   for (const auto i : c10::irange(graph_->inputs().size())) {
@@ -653,7 +608,6 @@ StaticModule::StaticModule(
 
   // construct SSA definition for non-constant nodes
   int node_idx = 0;
-  FastMap<Node*, bool> node_has_out_variant;
   for (Node* node : graph_->nodes()) {
     if (node->kind() == prim::Constant) {
       continue;
@@ -665,21 +619,13 @@ StaticModule::StaticModule(
       input_ssa_defs.emplace_back(value_to_ssa_def.at(input));
     }
     node_inputs_ssa_def_map_[node_idx] = input_ssa_defs;
-    auto pnode =
-        ProcessedNode(node, std::move(ivalue_inputs), opts.enable_out_variant);
-    node_has_out_variant.emplace(node, pnode.has_out_variant());
-    nodes_.emplace_back(std::move(pnode));
+    nodes_.emplace_back(
+        ProcessedNode(node, std::move(ivalue_inputs), opts.enable_out_variant));
     for (const auto i : c10::irange(node->outputs().size())) {
       value_to_ivalue[node->outputs()[i]] = nullptr;
       value_to_ssa_def[node->outputs()[i]] = std::make_pair(node_idx, i);
     }
     node_idx++;
-  }
-  for (auto& pnode : nodes_) {
-    if (pnode.outputs().size() == 1 &&
-        isOptimizableContainerType(pnode.node(), node_has_out_variant)) {
-      node_is_optimizable_container_type_.emplace(pnode.node());
-    }
   }
   for (auto output : graph_->outputs()) {
     output_ssa_defs_.emplace_back(value_to_ssa_def[output]);
@@ -691,7 +637,7 @@ StaticModule::StaticModule(
 
   if (opts_.optimize_memory) {
     auto lm = GetLivenessMap(graph_, external_values_, alias_db);
-    auto values = GetMemoryPlanningCandidates(graph_, node_has_out_variant);
+    auto values = GetMemoryPlanningCandidates(graph_);
     value_to_same_storage_values_ =
         GenerateSameStorageValues(lm, external_values_, values, alias_db);
   }
@@ -774,8 +720,6 @@ StaticRuntime::StaticRuntime(const StaticModule& sm) : static_module_(sm) {
     }
   }
 }
-
-StaticRuntime::~StaticRuntime() = default;
 
 std::vector<at::Tensor> StaticRuntime::operator()(
     const std::vector<at::Tensor>& inps) {
@@ -897,30 +841,11 @@ c10::IValue StaticRuntime::operator()(
   return std::move(*outputs_[0]);
 }
 
-namespace {
-
-std::string generate_latency_json(const std::string& label, double millis) {
-#ifdef FBCODE_CAFFE2
-  folly::dynamic json = folly::dynamic::object();
-  json["type"] = label;
-  json["metric"] = "latency";
-  json["unit"] = "ms";
-  json["value"] = millis;
-  return "PyTorchObserver " + folly::toJson(json);
-#else
-  return "";
-#endif
-}
-
-} // namespace
-
 void StaticRuntime::benchmark(
     const std::vector<c10::IValue>& args,
     const std::unordered_map<std::string, c10::IValue>& kwargs,
     const int warmup_runs,
-    const int main_runs,
-    bool print_per_node_time,
-    bool generate_ai_pep_output) {
+    const int main_runs) {
   float time_per_iter = benchmark_model(args, kwargs, warmup_runs, main_runs);
   std::cout << "Static runtime ms per iter: " << time_per_iter
             << ". Iters per second: " << 1000.0 / time_per_iter << std::endl;
@@ -928,13 +853,11 @@ void StaticRuntime::benchmark(
   IndividualMetrics results =
       benchmark_individual_ops(args, kwargs, warmup_runs, main_runs);
 
-  if (print_per_node_time) {
-    for (const auto i : c10::irange(nodes_.size())) {
-      const Node* node = nodes_[i].node();
-      std::cout << "Node #" << i << ": " << results.time_per_node[i]
-                << " ms/iter, ";
-      node->print(std::cout, 0, nullptr, false);
-    }
+  for (const auto i : c10::irange(nodes_.size())) {
+    const Node* node = nodes_[i].node();
+    std::cout << "Node #" << i << ": " << results.time_per_node[i]
+              << " ms/iter, ";
+    node->print(std::cout, 0, nullptr, false);
   }
 
   std::vector<std::pair<std::string, double>> time_per_node_type_vec{
@@ -951,21 +874,11 @@ void StaticRuntime::benchmark(
     std::cout << std::setw(15) << ms << " ms. " << std::setw(10)
               << results.percent_per_node_type[kind] << "%. " << kind << " ("
               << results.instances_per_node_type[kind] << " nodes";
-    if (results.out_nodes.count(kind)) {
-      std::cout << ", out variant)" << std::endl;
-    } else if (results.native_nodes.count(kind)) {
-      std::cout << ", native)" << std::endl;
-    } else {
+    if (results.out_nodes.count(kind) == 0) {
       std::cout << ")" << std::endl;
+    } else {
+      std::cout << ", out variant)" << std::endl;
     }
-
-    if (generate_ai_pep_output) {
-      LOG(INFO) << generate_latency_json(kind, ms);
-    }
-  }
-  if (generate_ai_pep_output) {
-    LOG(INFO) << generate_latency_json(
-        "static_runtime_first_iter", results.first_iter_time);
   }
   std::cout << std::setw(15) << results.total_time << " ms. in Total"
             << std::endl;
@@ -977,14 +890,8 @@ void StaticRuntime::benchmark(
             << " ms" << std::endl;
   std::cout << "Outputs deallocation time: " << results.output_dealloc_time
             << " ms" << std::endl;
-  std::cout << "First iter time: " << results.first_iter_time << " ms"
-            << std::endl;
 
   if (planner_) {
-    std::cout << "Total number of managed tensors: "
-              << planner_->total_num_managed_tensors() << std::endl;
-    std::cout << "Total number of unmanaged values: "
-              << planner_->total_num_unmanaged() << std::endl;
     std::cout << "Total memory managed: " << planner_->total_managed()
               << " bytes" << std::endl;
     if (static_module_.opts().optimize_memory) {
@@ -1113,7 +1020,7 @@ StaticRuntime::IndividualMetrics StaticRuntime::benchmark_individual_ops(
     const std::unordered_map<std::string, c10::IValue>& kwargs,
     const int warmup_runs,
     const int main_runs) {
-  TORCH_CHECK(warmup_runs >= 1 && main_runs >= 1);
+  TORCH_CHECK(warmup_runs >= 0 && main_runs >= 1);
 
   // See comment on above use of InferenceMode for
   // explanation.
@@ -1129,15 +1036,8 @@ StaticRuntime::IndividualMetrics StaticRuntime::benchmark_individual_ops(
 
   results.setup_time = timer.MilliSeconds();
 
-  // The first iteration profiles each node's output Tensors' sizes and
-  // initializes the memory planner with the profile information. Folllowing
-  // iterations just use the already established memory planning.
-  timer.Start();
-  operator()(args, kwargs);
-  results.first_iter_time = timer.MilliSeconds();
-
   // warmup runs
-  for (const auto i : c10::irange(warmup_runs - 1)) {
+  for (const auto i : c10::irange(warmup_runs)) {
     (void)i; // Suppress unused variable warning
     operator()(args, kwargs);
   }
@@ -1213,8 +1113,6 @@ StaticRuntime::IndividualMetrics StaticRuntime::benchmark_individual_ops(
     if (nodes_[i].has_out_variant()) {
       results.out_nodes.insert(kind);
       results.out_nodes_count++;
-    } else if (nodes_[i].has_native()) {
-      results.native_nodes.insert(kind);
     }
     results.total_time += results.time_per_node[i];
   }
@@ -1239,7 +1137,8 @@ void StaticRuntime::check_for_memory_leak(bool output_returned) {
     TORCH_CHECK(inputs_[i].isNone(), "Input ", i, " was not cleaned up");
   }
 
-  FastSet<const IValue*> output_ivalues(outputs_.begin(), outputs_.end());
+  std::unordered_set<const IValue*> output_ivalues(
+      outputs_.begin(), outputs_.end());
   for (const auto n : c10::irange(nodes_.size())) {
     auto& pnode = nodes_[n];
     for (const auto i : c10::irange(pnode.outputs().size())) {
@@ -1252,8 +1151,7 @@ void StaticRuntime::check_for_memory_leak(bool output_returned) {
         // check for intermediates
         if (!ival->isNone()) {
           TORCH_CHECK(
-              ival->isTensor() ||
-                  static_module_.is_optimizable_container_type(pnode.node()),
+              ival->isTensor() || isOptimizableContainerType(pnode.node()),
               error_msg);
           if (ival->isTensor()) {
             const auto& t = ival->toTensor();
@@ -1272,6 +1170,189 @@ void StaticRuntime::check_for_memory_leak(bool output_returned) {
     }
   }
   VLOG(1) << "Finished checking for memory leak";
+}
+
+static void assign_storage_to_managed_tensors(
+    StaticRuntime* runtime,
+    const std::unordered_set<const Value*>& managed_tensor_values,
+    const std::unordered_map<const Value*, std::vector<const Value*>>&
+        value_to_same_storage_values,
+    std::vector<std::pair<size_t, std::vector<at::Tensor*>>>& managed_tensors) {
+  // map Value to index to managed_storage, where multiple values can
+  // map to the same index (i.e., sharing the same storage)
+  std::unordered_map<const Value*, size_t> value_to_storage_idx;
+
+  // Snapshot of the current memory state
+  for (auto& pnode : runtime->nodes()) {
+    for (const auto i : c10::irange(pnode.outputs().size())) {
+      auto& ival = pnode.Output(i);
+      const auto* val = pnode.node()->outputs()[i];
+      if (managed_tensor_values.count(val)) {
+        TORCH_CHECK(ival.isTensor());
+        at::Tensor* tensor = &ival.toTensor();
+
+        if (value_to_storage_idx.count(val)) {
+          managed_tensors[value_to_storage_idx[val]].second.emplace_back(
+              tensor);
+        } else {
+          auto p =
+              std::make_pair<size_t, std::vector<at::Tensor*>>(0, {tensor});
+          managed_tensors.emplace_back(std::move(p));
+          // first of a group, update the value_to_storage_idx map with the
+          // index
+          if (value_to_same_storage_values.count(val)) {
+            auto storage_idx = managed_tensors.size() - 1;
+            for (const auto* v : value_to_same_storage_values.at(val)) {
+              value_to_storage_idx[v] = storage_idx;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+MemoryPlanner::MemoryPlanner(
+    StaticRuntime* runtime,
+    const std::unordered_map<const Value*, std::vector<const Value*>>&
+        value_to_same_storage_values,
+    const std::unordered_set<const Value*>& external_values,
+    bool enable_out_variant,
+    bool manage_graph_output_memory) {
+  // collect register indices of outputs of ops with out variant
+  std::unordered_set<const Value*> managed_tensor_values;
+  std::unordered_set<const Value*> leaked_values;
+  if (enable_out_variant) {
+    for (ProcessedNode& pnode : runtime->nodes()) {
+      if (pnode.has_out_variant()) {
+        for (const auto i : c10::irange(pnode.outputs().size())) {
+          const Value* out_v = pnode.node()->outputs()[i];
+          if (external_values.count(out_v)) {
+            continue;
+          }
+          // Types are stored in the underlying TorchScript IR
+          const auto& type = out_v->type();
+          if (type->cast<TensorType>()) {
+            managed_tensor_values.insert(out_v);
+          } else if (isOptimizableContainerType(pnode.node())) {
+            // We "leak" certain container types because their allocations take
+            // a long time
+            leaked_values.insert(out_v);
+          }
+        }
+      }
+    }
+  }
+
+  // collect unmanaged output ivalues
+  std::unordered_set<IValue*> unmanaged_ivalues;
+  for (ProcessedNode& pnode : runtime->nodes()) {
+    for (const auto i : c10::irange(pnode.outputs().size())) {
+      // Types are stored in the underlying TorchScript IR
+      const Value* out_v = pnode.node()->outputs()[i];
+      if (managed_tensor_values.count(out_v) || leaked_values.count(out_v)) {
+        continue;
+      }
+      IValue& out = pnode.Output(i);
+      unmanaged_ivalues.insert(&out);
+    }
+  }
+  // since runtime->outputs() escape from run(), remove them from
+  // managed_tensor_values and from unmanaged_ivalues
+  for (const Value* output : runtime->graph().outputs()) {
+    managed_tensor_values.erase(output);
+  }
+  for (IValue* output : runtime->outputs()) {
+    unmanaged_ivalues.erase(output);
+  }
+
+  // copy to unmanaged_ivalues_
+  for (IValue* out : unmanaged_ivalues) {
+    unmanaged_ivalues_.emplace_back(out);
+  }
+
+  if (enable_out_variant) {
+    ::torch::jit::assign_storage_to_managed_tensors(
+        runtime,
+        managed_tensor_values,
+        value_to_same_storage_values,
+        managed_tensors_);
+  }
+}
+
+// Don't change the size if it is already aligned, otherwise increase the size
+// to make it aligned.
+size_t MemoryPlanner::compute_aligned_tensor_size(size_t nbytes) {
+  // Note: everything below is size_t
+  return (nbytes + c10::gAlignment - 1) & (~(c10::gAlignment - 1));
+}
+
+at::DataPtr MemoryPlanner::allocate_buffer(size_t size) {
+  at::Allocator* allocator = c10::GetCPUCachingAllocator();
+  return allocator->allocate(size);
+}
+
+void MemoryPlanner::allocate() {
+  if (managed_bytes_ == 0) {
+    return;
+  }
+  buffer_ = allocate_buffer(managed_bytes_);
+
+  size_t offset = 0;
+  uint8_t* start = static_cast<uint8_t*>(buffer_.get());
+
+  reused_tensors_ = 0;
+  for (const auto& ms : managed_tensors_) {
+    auto tensor_size = ms.first;
+    if (tensor_size == 0) {
+      continue;
+    }
+    const auto& tensors = ms.second;
+    DCHECK_LE(offset + tensor_size, managed_bytes_);
+    void* src = static_cast<void*>(start + offset);
+
+    for (auto* tensor : tensors) {
+      tensor->storage().set_data_ptr_noswap(
+          at::DataPtr(src, src, nullptr, tensor->device()));
+      tensor->storage().set_nbytes(tensor_size);
+      reused_tensors_++;
+    }
+    reused_tensors_--;
+
+    offset += tensor_size;
+  }
+  DCHECK_EQ(offset, managed_bytes_);
+}
+
+void MemoryPlanner::deallocate() {
+  managed_bytes_ = 0;
+
+  // free memory used by outputs of ops in out variants
+  // but keep the TensorImpl and StorageImpl around
+  for (auto& ms : managed_tensors_) {
+    const auto& tensors = ms.second;
+    size_t max = ms.first;
+    for (auto& tensor : tensors) {
+      size_t current_size =
+          compute_aligned_tensor_size(tensor->storage().nbytes());
+      tensor->storage().unsafeGetStorageImpl()->reset();
+      max = std::max(max, current_size);
+    }
+    // Static runtime does not know the size of tensors statically, so we use
+    // the tensor size from the previous run to allocate tensors for the next
+    // run (following C2 tradition), exploiting the fact that tensor storage
+    // size does not have to match that of real tensor size. The following logic
+    // records the tensor storage size for the next run.
+    ms.first = max;
+    managed_bytes_ += max;
+  }
+
+  // for unmanaged ivalues (either tensor or non-tensor), we reset the *iv so
+  // that the objects pointed to by *iv may be reclaimed by reference counting
+  for (auto& iv : unmanaged_ivalues_) {
+    *iv = IValue();
+  }
+  buffer_ = {};
 }
 
 ProcessedNode::ProcessedNode(
@@ -1298,7 +1379,7 @@ ProcessedNode::ProcessedNode(
 }
 
 void ProcessedNode::run() {
-  DCHECK(verify_no_memory_overlap());
+  DCHECK(verify_outputs_not_overlapping_with_immutable_inputs());
   if (fn_) {
     fn_(this);
   } else if (native_fn_) {
@@ -1316,7 +1397,7 @@ void ProcessedNode::run() {
     }
 
     DCHECK(op_);
-    op_->operator()(stack);
+    op_->operator()(&stack);
 
     DCHECK_EQ(stack.size(), node_->outputs().size());
     for (const auto i : c10::irange(node_->outputs().size())) {
@@ -1325,35 +1406,8 @@ void ProcessedNode::run() {
   }
 }
 
-static bool checkNoMemoryOverlap(const at::Tensor& a, const at::Tensor& b) {
-  at::MemOverlapStatus status = at::get_overlap_status(a, b);
-  if (status == at::MemOverlapStatus::FULL ||
-      status == at::MemOverlapStatus::PARTIAL) {
-    return false;
-  }
-  if (status == at::MemOverlapStatus::TOO_HARD) {
-    LOG(WARNING) << "Detected TOO_HARD memory overlap status";
-  }
-  return true;
-}
-
-bool ProcessedNode::verify_no_memory_overlap() const {
-  for (size_t i = 0; i < outputs_.size(); ++i) {
-    if (!outputs_[i].isTensor()) {
-      continue;
-    }
-    const auto& out0_t = outputs_[i].toTensor();
-    for (size_t j = i + 1; j < outputs_.size(); ++j) {
-      if (!outputs_[j].isTensor()) {
-        continue;
-      }
-      const auto& out1_t = outputs_[j].toTensor();
-      if (!checkNoMemoryOverlap(out0_t, out1_t)) {
-        return false;
-      }
-    }
-  }
-
+bool ProcessedNode::verify_outputs_not_overlapping_with_immutable_inputs()
+    const {
   auto schema = node()->maybeSchema();
   if (!schema || schema->is_mutable()) {
     return true;
@@ -1368,7 +1422,8 @@ bool ProcessedNode::verify_no_memory_overlap() const {
         continue;
       }
       const auto& out_t = out.toTensor();
-      if (!checkNoMemoryOverlap(in_t, out_t)) {
+      at::MemOverlapStatus status = at::get_overlap_status(in_t, out_t);
+      if (status != at::MemOverlapStatus::NO) {
         return false;
       }
     }

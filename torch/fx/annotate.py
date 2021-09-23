@@ -1,7 +1,6 @@
 from torch.fx.proxy import Proxy
-from ._compatibility import compatibility
 
-@compatibility(is_backward_compatible=False)
+
 def annotate(val, type):
     # val could be either a regular value (not tracing)
     # or fx.Proxy (tracing)

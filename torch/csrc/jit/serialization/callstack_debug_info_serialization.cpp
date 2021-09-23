@@ -47,11 +47,15 @@ c10::IValue InlinedCallStackSerializer::serialize(
   } else {
     elements.emplace_back(c10::IValue());
   }
-  auto fn_name = cs_ptr->function_name();
-  if (!fn_name.empty()) {
-    elements.emplace_back(fn_name);
+  if (cs_ptr->function()) {
+    elements.emplace_back(cs_ptr->function()->name());
   } else {
-    elements.emplace_back("FunctionName_UNKNOWN");
+    auto fn_name = cs_ptr->function_name();
+    if (!fn_name.empty()) {
+      elements.emplace_back(fn_name);
+    } else {
+      elements.emplace_back("FunctionName_UNKNOWN");
+    }
   }
   c10::IValue serialized_cs = c10::ivalue::Tuple::create(elements);
   serialized_inlined_callstack_[cs_ptr] = serialized_cs;

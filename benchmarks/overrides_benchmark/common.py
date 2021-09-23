@@ -16,8 +16,7 @@ class WithTorchFunction:
 
         self._tensor = torch.tensor(data, requires_grad=requires_grad)
 
-    @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
+    def __torch_function__(self, func, types, args=(), kwargs=None):
         if kwargs is None:
             kwargs = {}
 
@@ -25,8 +24,7 @@ class WithTorchFunction:
 
 
 class SubWithTorchFunction(torch.Tensor):
-    @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
+    def __torch_function__(self, func, types, args=(), kwargs=None):
         if kwargs is None:
             kwargs = {}
 

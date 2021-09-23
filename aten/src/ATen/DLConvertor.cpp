@@ -39,7 +39,7 @@ DLDataType getDLDataType(const Tensor& t) {
       dtype.code = DLDataTypeCode::kDLFloat;
       break;
     case ScalarType::Bool:
-      TORCH_CHECK(false, "Bool type is not supported by dlpack");
+      dtype.code = DLDataTypeCode::kDLUInt;
       break;
     case ScalarType::ComplexHalf:
       dtype.code = DLDataTypeCode::kDLComplex;

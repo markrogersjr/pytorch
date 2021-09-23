@@ -29,31 +29,19 @@ class Value {
     Intvalues.push_back(0);
   }
 
-  template <typename T>
-  Value(Dtype dtype, T v) : dtype_(dtype) {
-#define TYPE_CASE(Type, Name)  \
-  if (dtype == k##Name) {      \
-    Name##values.push_back(v); \
-    return;                    \
-  }
-    AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, TYPE_CASE);
-#undef TYPE_CASE
-    throw unsupported_dtype();
-  }
-
 #define VALUE_CTOR(Type, Name)      \
   Value(Type v) : dtype_(k##Name) { \
     Name##values.push_back(v);      \
   }
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
-  AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, VALUE_CTOR);
+  AT_FORALL_SCALAR_TYPES_AND2(Bool, Half, VALUE_CTOR);
 #undef VALUE_CTOR
 
 #define VALUE_VEC_CTOR(Type, Name)  \
   Value(const std::vector<Type>& v) \
       : dtype_(Dtype(k##Name, v.size())), Name##values(v) {}
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
-  AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, VALUE_VEC_CTOR);
+  AT_FORALL_SCALAR_TYPES_AND2(Bool, Half, VALUE_VEC_CTOR);
 #undef VALUE_VEC_CTOR
 
   template <typename T>
@@ -61,8 +49,6 @@ class Value {
 
   template <typename T>
   const std::vector<T>& as_vec() const;
-
-  int64_t intValue() const;
 
   Dtype dtype() const {
     return dtype_;
@@ -72,7 +58,7 @@ class Value {
   Dtype dtype_;
 
 #define VALUE_STORAGE(Type, Name) std::vector<Type> Name##values;
-  AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, VALUE_STORAGE);
+  AT_FORALL_SCALAR_TYPES_AND2(Bool, Half, VALUE_STORAGE);
 #undef VALUE_STORAGE
   void* ptr;
 };
@@ -85,7 +71,7 @@ class Value {
     }                                   \
     return Name##values[0];             \
   }
-AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, VALUE_AS_DISPATCH);
+AT_FORALL_SCALAR_TYPES_AND2(Bool, Half, VALUE_AS_DISPATCH);
 #undef VALUE_AS_DISPATCH
 
 #define VALUE_AS_VEC_DISPATCH(Type, Name)                       \
@@ -96,7 +82,7 @@ AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, VALUE_AS_DISPATCH);
     }                                                           \
     return Name##values;                                        \
   }
-AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, VALUE_AS_VEC_DISPATCH);
+AT_FORALL_SCALAR_TYPES_AND2(Bool, Half, VALUE_AS_VEC_DISPATCH);
 #undef VALUE_AS_VEC_DISPATCH
 
 template <typename To, typename From>
@@ -111,7 +97,7 @@ class SimpleIREvaluatorImpl;
 class TORCH_API SimpleIREvaluator : public CodeGen {
  public:
   SimpleIREvaluator(
-      StmtPtr stmt,
+      Stmt* stmt,
       const std::vector<BufferArg>& buffer_args,
       at::Device device = at::kCPU,
       const std::string& kernel_func_name = "func");
@@ -128,7 +114,7 @@ class TORCH_API SimpleIREvaluator : public CodeGen {
     call(args);
   }
 
-  void bindVar(VarPtr v, ExprPtr e);
+  void bindVar(Var* v, Expr* e);
   Value value() const;
 
  private:
@@ -157,14 +143,17 @@ class ExprEval {
       : dtype_(expr.dtype()) {
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
     std::vector<BufferArg> buffer_args_extended = buffer_args;
-    BufHandle ret_buf("ret_val", {1}, dtype_);
+    Placeholder ret_buf("ret_val", dtype_, {1});
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    std::vector<ExprHandle> indices;
-    ExprHandle zero = IntImm::make(0);
-    for (size_t i = 0; i < ret_buf.ndim(); i++) {
+    std::vector<Expr*> indices;
+    Expr* zero = new IntImm(0);
+    for (size_t i = 0; i < ret_buf.data()->ndim(); i++) {
       indices.push_back(zero);
     }
-    StmtPtr store_stmt = Store::make(ret_buf, indices, expr);
+    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
+    Stmt* store_stmt =
+        // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
+        new Store(ret_buf.data(), indices, expr.node());
     buffer_args_extended.emplace_back(ret_buf);
     codegen_.reset(new CodeGenType(store_stmt, buffer_args_extended));
   }
@@ -178,7 +167,7 @@ class ExprEval {
     call(call_args);
   }
 
-  void bindVar(VarPtr v, ExprPtr e) {
+  void bindVar(Var* v, Expr* e) {
     codegen_->bindVar(v, e);
   }
 
@@ -203,7 +192,7 @@ class ExprEval {
     ret_value_ = Value(ret_val_arg[0]);                 \
   } break;
       // NOLINTNEXTLINE(modernize-use-emplace)
-      AT_FORALL_SCALAR_TYPES_AND2(Half, BFloat16, TYPE_CASE);
+      AT_FORALL_SCALAR_TYPES_AND(Half, TYPE_CASE);
 #undef TYPE_CASE
       case ScalarType::Bool: {
         // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
@@ -228,7 +217,7 @@ class ExprEval {
     codegen_->call_raw(args_extended);           \
     ret_value_ = Value(ret_val_arg[0]);          \
   } break;
-      AT_FORALL_SCALAR_TYPES_AND2(Half, BFloat16, TYPE_CASE);
+      AT_FORALL_SCALAR_TYPES_AND(Half, TYPE_CASE);
 #undef TYPE_CASE
       case ScalarType::Bool: {
         // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
@@ -264,20 +253,16 @@ class ExprEval {
   Value ret_value_;
 };
 
-// Evaluates the given expression and returns an int64_t value if the result of
-// the given expression is int64_t.
-c10::optional<int64_t> evalInt(ExprPtr e);
-
 // Substitutes the given vars with their corresponding expressions in the input
 // expression.
-inline ExprPtr Substitute(ExprPtr expr, const VarMapping& var_mapping) {
+inline Expr* Substitute(Expr* expr, const VarMapping& var_mapping) {
   VarSubMutator var_sub(var_mapping);
   return expr->accept_mutator(&var_sub);
 }
 
 // Substitutes the given vars with their corresponding expressions in the input
 // statement.
-inline StmtPtr Substitute(StmtPtr stmt, const VarMapping& var_mapping) {
+inline Stmt* Substitute(Stmt* stmt, const VarMapping& var_mapping) {
   VarSubMutator var_sub(var_mapping);
   return stmt->accept_mutator(&var_sub);
 }
@@ -286,7 +271,7 @@ inline StmtPtr Substitute(StmtPtr stmt, const VarMapping& var_mapping) {
 // their corresponding expressions in the clone.
 // NOTE: This works because cloning reuses variables and does not create new
 // ones, and `VarMapping` input has variables as the key.
-inline ExprPtr SubstituteInClone(ExprPtr expr, const VarMapping& var_mapping) {
+inline Expr* SubstituteInClone(Expr* expr, const VarMapping& var_mapping) {
   VarSubMutator var_sub(var_mapping);
   return Expr::clone(expr)->accept_mutator(&var_sub);
 }
@@ -295,7 +280,7 @@ inline ExprPtr SubstituteInClone(ExprPtr expr, const VarMapping& var_mapping) {
 // their corresponding expressions in the clone.
 // NOTE: This works because cloning reuses variables and does not create new
 // ones, and `VarMapping` input has variables as the key.
-inline StmtPtr SubstituteInClone(StmtPtr stmt, const VarMapping& var_mapping) {
+inline Stmt* SubstituteInClone(Stmt* stmt, const VarMapping& var_mapping) {
   VarSubMutator var_sub(var_mapping);
   return Stmt::clone(stmt)->accept_mutator(&var_sub);
 }

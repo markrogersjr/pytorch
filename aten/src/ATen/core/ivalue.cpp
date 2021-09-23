@@ -8,7 +8,6 @@
 #include <c10/util/StringUtil.h>
 #include <c10/util/hash.h>
 #include <cmath>
-#include <iostream>
 
 namespace c10 {
 bool _fastEqualsForContainer(const IValue& lhs, const IValue& rhs) {

@@ -6,21 +6,21 @@ namespace torch {
 namespace jit {
 namespace tensorexpr {
 
-ReduceOpPtr Reducer::operator()(
-    BufPtr result_buf,
+ReduceOp* Reducer::operator()(
+    Buf* result_buf,
     ExprHandle body,
-    const std::vector<ExprPtr>& output,
-    const std::vector<VarPtr>& inner) const {
-  return alloc<ReduceOp>(
+    const std::vector<Expr*>& output,
+    const std::vector<Var*>& inner) const {
+  return new ReduceOp(
       complete(result_buf, interaction_, body, output, inner), inner, *this);
 }
 
-ReduceOpPtr Reducer::operator()(
-    BufPtr result_buf,
-    ExprPtr body,
-    const std::vector<ExprPtr>& output,
-    const std::vector<VarPtr>& inner) const {
-  return alloc<ReduceOp>(
+ReduceOp* Reducer::operator()(
+    Buf* result_buf,
+    Expr* body,
+    const std::vector<Expr*>& output,
+    const std::vector<Var*>& inner) const {
+  return new ReduceOp(
       complete(result_buf, interaction_, ExprHandle(body), output, inner),
       inner,
       *this);

@@ -295,7 +295,6 @@ struct Benchmark {
   std::function<void(int)> run_one_work_item;
 };
 
-// NOLINTNEXTLINE(bugprone-exception-escape)
 int main(int argc, char* argv[]) {
   int max_thread = atoi(argv[1]);
   cuda = std::string(argv[2]) == "cuda";

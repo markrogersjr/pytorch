@@ -20,9 +20,6 @@ def average_parameters(
         return
 
     params_it1, params_it2 = itertools.tee(params)
-    # If the input parameters have different data types,
-    # packing these parameters will trigger an implicit type up-casting.
-    # The original parameter data types will be restored during the subsequent unpacking.
     flat_params = torch.cat([p.data.view(-1) for p in params_it1])
     flat_params /= dist.get_world_size(group_to_use)
     # Make sure the allreduce will not conflict with any other ongoing process group.
@@ -32,5 +29,5 @@ def average_parameters(
 
     offset = 0
     for p in params_it2:
-        p.data = flat_params[offset : offset + p.numel()].view_as(p).type_as(p)
+        p.data = flat_params[offset : offset + p.numel()].view_as(p)
         offset += p.numel()

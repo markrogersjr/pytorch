@@ -13,12 +13,6 @@ namespace jit {
 
 namespace {
 
-C10_ALWAYS_INLINE std::string debugHandlesNotFoundMessage(
-    const std::string& debug_handles_string) {
-  return "Debug info for handle(s): " + debug_handles_string +
-      ", was not found.";
-}
-
 std::pair<std::vector<StackEntry>, std::string> getStackTraceWithModuleHierarchy(
     const DebugInfoTuple& source_callstack,
     const std::string& caller_name) {
@@ -55,7 +49,11 @@ std::pair<std::vector<StackEntry>, std::string> getStackTraceWithModuleHierarchy
       // Now add source range info to stack
       entries.emplace_back(
           StackEntry{prev_function_name, callstack_ptr->source_range()});
-      prev_function_name = callstack_ptr->function_name();
+      if (callstack_ptr->function()) {
+        prev_function_name = callstack_ptr->function()->name();
+      } else {
+        prev_function_name = callstack_ptr->function_name();
+      }
       // Function name appended here
       // It is renamed to prev_function_name because for StackEntry
       // it will be appended in the next iteration. This is the format
@@ -122,14 +120,13 @@ MobileDebugTable::MobileDebugTable(
       size_t debug_size{0};
       std::tie(debug_data, debug_size) = reader->getRecord(record_name);
       auto ivalues =
-          std::move(
-              *jit::unpickle(
-                   reinterpret_cast<const char*>(debug_data.get()), debug_size)
-                   .toTuple())
-              .elements();
+          jit::unpickle(
+              reinterpret_cast<const char*>(debug_data.get()), debug_size)
+              .toTuple()
+              ->elements();
       SourceRangeDeserializer deserializer;
       for (auto& val : ivalues) {
-        auto tup_elems = std::move(*std::move(val).toTuple()).elements();
+        auto tup_elems = val.toTuple()->elements();
         // For BC we decode only tuples with 3 elements
         // assuming it contains
         // byte_offset, debug_handle (=source range tag), source range
@@ -159,7 +156,8 @@ std::string MobileDebugTable::getModuleHierarchyInfo(
     const std::string& top_module_type_name) const {
   const auto it = callstack_ptr_map_.find(debug_handle);
   if (it == callstack_ptr_map_.end()) {
-    return debugHandlesNotFoundMessage(std::to_string(debug_handle));
+    return "Module info for handle, " + std::to_string(debug_handle) +
+        ", not found.";
   }
   return (getStackTraceWithModuleHierarchy(
               {it->second}, "top", top_module_type_name))
@@ -178,7 +176,8 @@ std::string MobileDebugTable::getSourceDebugString(
     const std::string& top_module_type_name) const {
   const auto it = callstack_ptr_map_.find(debug_handle);
   if (it == callstack_ptr_map_.end()) {
-    return debugHandlesNotFoundMessage(std::to_string(debug_handle));
+    return "Debug info for handle, " + std::to_string(debug_handle) +
+        ", not found.";
   }
   return (getStackTraceWithModuleHierarchy(
               {it->second}, "top", top_module_type_name))
@@ -213,7 +212,8 @@ std::pair<std::string, std::string> MobileDebugTable::
       debug_handles_string += std::to_string(debug_handle);
     }
     debug_handles_string += "}";
-    debug_handles_string = debugHandlesNotFoundMessage(debug_handles_string);
+    debug_handles_string =
+        "Debug info for handles: " + debug_handles_string + ", was not found.";
     return {debug_handles_string, debug_handles_string};
   }
   return (getStackTraceWithModuleHierarchy(

@@ -16,6 +16,7 @@
 #include <ATen/native/cuda/Loops.cuh>
 #include <ATen/native/cuda/KernelUtils.cuh>
 #include <c10/util/MaybeOwned.h>
+#include <THC/THCTensorInfo.cuh>
 
 namespace at { namespace native {
 
@@ -68,9 +69,9 @@ void gpu_index_kernel(TensorIterator& iter, IntArrayRef index_size, IntArrayRef 
     return;
   }
 
-  auto sizes = at::detail::Array<int64_t, MAX_DIMS>(0);
-  auto strides = at::detail::Array<int64_t, MAX_DIMS>(0);
-  auto index_ptrs = at::detail::Array<char*, MAX_DIMS>(nullptr);
+  auto sizes = at::detail::Array<int64_t, 25>(0);
+  auto strides = at::detail::Array<int64_t, 25>(0);
+  auto index_ptrs = at::detail::Array<char*, 25>(nullptr);
   for (int i = 0; i < num_indices; i++) {
     sizes[i] = index_size[i];
     strides[i] = index_stride[i];

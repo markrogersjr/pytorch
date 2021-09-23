@@ -3,7 +3,7 @@
 #include <c10/core/Backend.h>
 #include <c10/util/Exception.h>
 
-#include <ostream>
+#include <iostream>
 
 namespace c10 {
 enum class Layout : int8_t { Strided, Sparse, SparseCsr, Mkldnn, NumOptions };

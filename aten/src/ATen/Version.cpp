@@ -184,10 +184,6 @@ std::string show_config() {
     ss << detail::getCUDAHooks().showConfig();
   }
 
-  if (hasORT()) {
-    ss << detail::getORTHooks().showConfig();
-  }
-
   ss << "  - Build settings: ";
   for (const auto& pair : caffe2::GetBuildOptions()) {
     if (!pair.second.empty()) {

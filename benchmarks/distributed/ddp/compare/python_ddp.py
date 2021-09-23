@@ -1,5 +1,4 @@
 import functools
-import torch
 import torch.distributed as dist
 import torch.nn as nn
 
@@ -178,7 +177,7 @@ class PythonDDP(nn.Module):
         assert grad is not None
         assert param.requires_grad
         assert param.numel() == grad.numel()
-        bucket.buffer[offset : offset + sz].copy_(grad.detach().view(-1))
+        bucket.buffer[offset : offset + sz].copy_(grad.data.view(-1))
         bucket.ready_param_grad_count += 1
 
         # Kickoff grad reduction async when bucket is full. This ensures grad
@@ -220,8 +219,7 @@ class PythonDDP(nn.Module):
             for cur_p, cur_offset in bucket.param_to_offset.items():
                 sz = cur_p.numel()
                 if cur_p.grad is not None:
-                    with torch.no_grad():
-                        cur_p.grad.copy_(bucket.buffer[cur_offset : cur_offset + sz].view_as(cur_p))
+                    cur_p.grad.data.copy_(bucket.buffer[cur_offset : cur_offset + sz].view_as(cur_p))
                 else:
                     cur_p.grad = bucket.buffer[cur_offset : cur_offset + sz].view_as(cur_p).clone()
 

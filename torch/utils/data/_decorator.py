@@ -11,14 +11,8 @@ from torch.utils.data._typing import _DataPipeMeta
 class functional_datapipe(object):
     name: str
 
-    def __init__(self, name: str, enable_df_api_tracing=False) -> None:
-        """
-            Args:
-                enable_df_api_tracing - if set, any returned DataPipe would accept
-                DataFrames API in tracing mode.
-        """
+    def __init__(self, name: str) -> None:
         self.name = name
-        self.enable_df_api_tracing = enable_df_api_tracing
 
     def __call__(self, cls):
         if issubclass(cls, IterDataPipe):
@@ -31,9 +25,9 @@ class functional_datapipe(object):
                     not (hasattr(cls, '__self__') and
                          isinstance(cls.__self__, non_deterministic)):
                     raise TypeError('`functional_datapipe` can only decorate IterDataPipe')
-            IterDataPipe.register_datapipe_as_function(self.name, cls, enable_df_api_tracing=self.enable_df_api_tracing)
+            IterDataPipe.register_datapipe_as_function(self.name, cls)
         elif issubclass(cls, MapDataPipe):
-            MapDataPipe.register_datapipe_as_function(self.name, cls, enable_df_api_tracing=self.enable_df_api_tracing)
+            MapDataPipe.register_datapipe_as_function(self.name, cls)
 
         return cls
 

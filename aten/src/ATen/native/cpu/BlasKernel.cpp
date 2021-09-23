@@ -156,13 +156,13 @@ void gemm_core_(
     const scalar_t *b, int64_t ldb,
     scalar_t beta,
     scalar_t *c, int64_t ldc) {
-  if(transa == TransposeType::NoTranspose && transb == TransposeType::NoTranspose) {
+  if(transa == NoTranspose && transb == NoTranspose) {
     return gemm_notrans_(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
-  } else if(transa == TransposeType::Transpose && transb != TransposeType::Transpose) {
+  } else if(transa == Transpose && transb != Transpose) {
     gemm_transa_(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
-  } else if(transa == TransposeType::NoTranspose && transb == TransposeType::Transpose) {
+  } else if(transa == NoTranspose && transb == Transpose) {
     gemm_transb_(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
-  } else {  // transa == TransposeType::Transpose && transb == TransposeType::Transpose
+  } else {  // transa == Transpose && transb == Transpose
     gemm_transab_(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
   }
 }

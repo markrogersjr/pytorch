@@ -61,10 +61,6 @@ from jit.test_convert_activation import TestFunctionalToInplaceActivation, TestI
 from jit.test_parametrization import TestParametrization  # noqa: F401
 from jit.test_attr import TestGetDefaultAttr  # noqa: F401
 from jit.test_aten_pow import TestAtenPow  # noqa: F401
-from jit.test_optimize_for_mobile_preserve_debug_info import TestOptimizeForMobilePreserveDebugInfo  # noqa: F401
-from jit.test_union import TestUnion  # noqa: F401
-from jit.test_models import MnistNet
-from jit.test_batch_mm import TestBatchMM  # noqa: F401
 
 # Torch
 from torch import Tensor
@@ -73,7 +69,8 @@ from torch._six import PY37
 from torch.autograd import Variable
 from torch.jit.annotations import BroadcastingList2, BroadcastingList3, Any  # noqa: F401
 from torch.nn.utils.rnn import PackedSequence
-from torch.testing import FileCheck, make_tensor
+from torch.testing import FileCheck
+from torch.testing._internal.common_utils import make_tensor
 import torch.autograd.profiler
 import torch.cuda
 import torch.jit
@@ -395,6 +392,11 @@ class TestJit(JitTestCase):
         self.assertFalse(m2.p0.is_cuda)
         self.assertFalse(m2.b0.is_cuda)
 
+    def test_model_save_error(self):
+        with TemporaryFileName() as fname:
+            with self.assertRaisesRegex(pickle.PickleError, "not supported"):
+                torch.save(FooToPickle(), fname)
+
     @unittest.skipIf(not RUN_CUDA, "restore device requires CUDA")
     def test_restore_device_cuda(self):
         class MyModule(torch.jit.ScriptModule):
@@ -495,7 +497,7 @@ class TestJit(JitTestCase):
         FileCheck().check_not("aten::relu(") \
             .check("aten::_add_relu(") \
             .run(m.graph)
-        torch.testing.assert_close(orig_res, new_res)
+        torch.testing.assert_allclose(orig_res, new_res)
 
         # add, relu_
         a = torch.rand((7, 11))
@@ -514,7 +516,7 @@ class TestJit(JitTestCase):
         FileCheck().check_not("aten::relu_(") \
             .check("aten::_add_relu(") \
             .run(m.graph)
-        torch.testing.assert_close(orig_res, new_res)
+        torch.testing.assert_allclose(orig_res, new_res)
 
         class Madd_(torch.nn.Module):
             def __init__(self, relu_op):
@@ -545,10 +547,10 @@ class TestJit(JitTestCase):
             .check_not("aten::relu_(") \
             .check("aten::_add_relu_(") \
             .run(m.graph)
-        torch.testing.assert_close(orig_res, new_res)
+        torch.testing.assert_allclose(orig_res, new_res)
         # Since _add_relu_ does inplace mutation ensure
         # a_copy is modified
-        torch.testing.assert_close(orig_res, a_copy)
+        torch.testing.assert_allclose(orig_res, a_copy)
 
         class Madd_out(torch.nn.Module):
             def __init__(self, relu_op):
@@ -583,10 +585,10 @@ class TestJit(JitTestCase):
             .check_not("aten::relu_(") \
             .check("aten::_add_relu(") \
             .run(m.graph)
-        torch.testing.assert_close(orig_res, new_res)
+        torch.testing.assert_allclose(orig_res, new_res)
         # Since _add_relu_ with out=a does inplace mutation ensure
         # a_copy is modified
-        torch.testing.assert_close(orig_res, a_copy)
+        torch.testing.assert_allclose(orig_res, a_copy)
 
     @unittest.skipIf(GRAPH_EXECUTOR != ProfilingMode.LEGACY, "Simple executor doesn't have shape information")
     def test_peephole_optimize_shape_ops(self):
@@ -2520,6 +2522,32 @@ graph(%Ra, %Rb):
 
         t = Test()
         self.assertEqual(t(torch.ones(1)), torch.ones(1) + 4)
+
+    def test_union_to_optional(self):
+        def test1(u: Union[int, None]) -> int:
+            if u is not None:
+                return u
+            else:
+                return 0
+        scripted = torch.jit.script(test1)
+        self.assertEqual(scripted(10), test1(10))
+
+        def test2(u: Union[None, int]) -> int:
+            if u is not None:
+                return u
+            else:
+                return 0
+        scripted = torch.jit.script(test2)
+        self.assertEqual(scripted(40), test2(40))
+
+        def test3(u: Union[float, int]) -> int:
+            if u is not None:
+                return u
+            else:
+                return 0
+        expected_result = "General Union types are not currently supported"
+        with self.assertRaisesRegex(RuntimeError, expected_result):
+            torch.jit.script(test3)
 
     def test_mutable_default_values(self):
         with self.assertRaisesRegex(Exception, "Mutable default parameters"):
@@ -5916,6 +5944,7 @@ a")
         self.assertEqual(test_bool_arith_not(torch.zeros(3)), 1)
         self.assertTrue(str(test_bool_arith_not.graph).count('if') == 0)
 
+
     def test_conditional_casting(self):
         def test_bool_cast_tensor(x):
             if x:
@@ -8859,7 +8888,7 @@ dedent """
     def test_pack_unpack_state(self):
         sm = TestScript.DerivedStateModule()
         x = torch.rand(3, 4, dtype=torch.float)
-        torch.testing.assert_close(sm(x), x + torch.neg(torch.ones(3, 4, dtype=torch.float)))
+        torch.testing.assert_allclose(sm(x), x + torch.neg(torch.ones(3, 4, dtype=torch.float)))
 
         # Test save path
         self.assertFalse(sm.pack_called.item())
@@ -8870,14 +8899,13 @@ dedent """
         # ensure unpack was called after serialization so as to leave the module in an initialized state
         self.assertTrue(sm.unpack_called.item())
 
-        torch.testing.assert_close(sm.derived, torch.neg(sm.param))
+        torch.testing.assert_allclose(sm.derived, torch.neg(sm.param))
 
         # Test load paths
         self.assertTrue(imported.unpack_called.item())
-        torch.testing.assert_close(imported(x), x + torch.neg(torch.ones(3, 4, dtype=torch.float)))
+        torch.testing.assert_allclose(imported(x), x + torch.neg(torch.ones(3, 4, dtype=torch.float)))
 
     @unittest.skipIf(not TEST_MKL, "PyTorch is built without MKL support")
-    @unittest.skipIf(True, "Skipping while landing PR stack")
     def test_torch_functional(self):
         def stft(input, n_fft):
             # type: (Tensor, int) -> Tensor
@@ -9073,11 +9101,11 @@ dedent """
                 return self.submod(x + self.buf)
 
         m = Mod()
-        torch.testing.assert_close(m(torch.zeros(3, 4)), torch.ones(3, 4) * 6)
+        torch.testing.assert_allclose(m(torch.zeros(3, 4)), torch.ones(3, 4) * 6)
         m.apply(lambda s: s._pack())
-        torch.testing.assert_close(m(torch.zeros(3, 4)), torch.zeros(3, 4))
+        torch.testing.assert_allclose(m(torch.zeros(3, 4)), torch.zeros(3, 4))
         m.apply(lambda s: s._unpack())
-        torch.testing.assert_close(m(torch.zeros(3, 4)), torch.ones(3, 4) * 6)
+        torch.testing.assert_allclose(m(torch.zeros(3, 4)), torch.ones(3, 4) * 6)
 
     def test_torch_any(self):
         def fn(x):
@@ -9787,9 +9815,8 @@ dedent """
             bar()
 
     def test_if_different_type(self):
-        with self.assertRaisesRegex(RuntimeError, "c0 is set to type "
-                                    "int in the true branch and type "
-                                    "float in the false branch"):
+        with self.assertRaisesRegex(RuntimeError, "Type mismatch: c0 is set to type int "
+                                    "in the true branch and type float in the false branch:"):
             @torch.jit.script
             def diff_type_used():
                 if 1 == 2:
@@ -9798,7 +9825,7 @@ dedent """
                     c0 = 1.0
                 return c0
 
-        with self.assertRaisesRegex(RuntimeError, "Variable 'c0' previously had type float"):
+        with self.assertRaisesRegex(RuntimeError, "Variable 'c0' previously has type float"):
             @torch.jit.script
             def diff_existing_type(x):
                 c0 = 1.0
@@ -10581,7 +10608,7 @@ dedent """
         with self.assertRaisesRegex(RuntimeError, r'Expected a value of'
                                     r' type \'List\[int\]\' for argument'
                                     r' \'size\' but instead found type '
-                                    r'\'List\[Union\[List\[int\], int\]\]'):
+                                    r'\'List\[Any\]\''):
             @torch.jit.script
             def f6(a):
                 a.expand(size=[3, [4]])
@@ -10746,68 +10773,6 @@ dedent """
 
         self.assertEqual(w.grad, w_ref.grad)
         self.assertEqual(b.grad, b_ref.grad)
-
-    @unittest.skipIf(not RUN_CUDA, "running tests on cuda to verify cudnn fix")
-    def test_batch_norm_inference_backward_cuda(self):
-        with enable_profiling_mode_for_profiling_tests():
-            class MyBatchNorm(torch.nn.Module):
-                def __init__(self, num_features, affine, track_running_stats):
-                    super(MyBatchNorm, self).__init__()
-                    self.bn = torch.nn.BatchNorm2d(
-                        num_features, 1e-5, affine=affine, track_running_stats=track_running_stats).float()
-
-                def forward(self, x: torch.Tensor):
-                    o = self.bn(x)
-                    o = torch.nn.functional.relu(o)
-                    return o
-
-            batch = 4
-            c = 2
-            hw = 3
-            # Initialize param and input values
-            x_init = torch.randn(batch, c, hw, hw, dtype=torch.float).cuda()
-            grad = torch.randn(batch, c, hw, hw, dtype=torch.float).cuda()
-
-            training = False
-            affine = True
-            track_running_stats = True
-
-            module = torch.jit.script(MyBatchNorm(c, affine, track_running_stats)).cuda()
-            ref_module = MyBatchNorm(c, affine, track_running_stats).cuda()
-            module.eval()
-            ref_module.eval()
-
-            jit_module = torch.jit.script(module)
-            ref_module.load_state_dict(module.state_dict())
-
-            x = x_init.detach().clone()
-            x.requires_grad_()
-            x_ref = x_init.detach().clone()
-            x_ref.requires_grad_()
-
-            # Test symbolic differentiation
-            # Run Forward and Backward thrice to trigger autodiff graph
-            for i in range(0, 3):
-                y = jit_module(x)
-                y.backward(grad)
-            x.grad.zero_()
-
-            module.bn.running_mean.zero_()
-            module.bn.running_var.fill_(1.0)
-            ref_module.bn.running_mean.zero_()
-            ref_module.bn.running_var.fill_(1.0)
-
-            # run jitted module
-            y = jit_module(x)
-            y.backward(grad)
-            # reference computation
-            y_ref = ref_module(x_ref)
-            y_ref.backward(grad)
-
-            self.assertEqual(y_ref, y)
-            self.assertEqual(x.grad, x_ref.grad)
-            self.assertEqual(module.bn.running_mean, ref_module.bn.running_mean)
-            self.assertEqual(module.bn.running_var, ref_module.bn.running_var)
 
     def test_zeros(self):
         class M(torch.jit.ScriptModule):
@@ -10993,7 +10958,7 @@ dedent """
         torch._C._jit_pass_remove_dropout(m._c)
         res = m(data)
         FileCheck().check_not("aten::dropout").run(str(m.graph))
-        torch.testing.assert_close(ref_res, res, rtol=1e-2, atol=1e-3)
+        torch.testing.assert_allclose(ref_res, res, rtol=1e-2, atol=1e-3)
 
     def test_unfold_zero_dim(self):
         def fn(x):
@@ -11528,8 +11493,7 @@ dedent """
             out = torch.jit.annotate(int, [x for x in [1, 2, 3]])  # noqa: C416
             return out
 
-        with self.assertRaisesRegex(Exception, "Expected an annotation"
-                                    " of type List"):
+        with self.assertRaisesRegex(Exception, "Expected list type annotation"):
             torch.jit.script(bad_type_annotation)
 
     def test_list_comprehension_variable_write(self):
@@ -12652,7 +12616,7 @@ dedent """
         for pair in self.type_input_return_pairs():
             cu = torch.jit.CompilationUnit(self.format_code(code, pair))
             test_str.append(str(cu.foo.schema))
-        self.assertExpected("\n".join(test_str) + "\n")
+        self.assertExpected("\n".join(test_str))
 
     #  String frontend , Python 3-style type annotations , Script method
     def test_annot_string_py3_method(self):
@@ -12671,7 +12635,7 @@ dedent """
             tm = TestModule()
             tm.define(self.format_code(code, pair))
             test_str.append(str(tm.foo.schema))
-        self.assertExpectedStripMangled("\n".join(test_str) + "\n")
+        self.assertExpectedStripMangled("\n".join(test_str))
 
     #  String frontend , MyPy-style type comments , Script function
     def test_annot_string_mypy_fn(self):
@@ -12684,7 +12648,7 @@ dedent """
         for pair in self.type_input_return_pairs():
             cu = torch.jit.CompilationUnit(self.format_code(code, pair))
             test_str.append(str(cu.foo.schema))
-        self.assertExpectedStripMangled("\n".join(test_str) + "\n")
+        self.assertExpectedStripMangled("\n".join(test_str))
 
     #  String frontend , MyPy-style type comments , Script method
     def test_annot_string_mypy_method(self):
@@ -12705,7 +12669,7 @@ dedent """
             tm = TestModule()
             tm.define(self.format_code(code, pair))
             test_str.append(str(tm.foo.schema))
-        self.assertExpectedStripMangled("\n".join(test_str) + "\n")
+        self.assertExpectedStripMangled("\n".join(test_str))
 
     #  Python AST Frontend , Python 3-style type annotations , Script function
     def test_annot_ast_py3_fn(self):
@@ -12722,7 +12686,7 @@ dedent """
         for pair in self.type_input_return_pairs():
             fn = jit_utils._get_py3_code(self.format_code(code, pair), 'foo')
             test_str.append(str(fn.schema))
-        self.assertExpectedStripMangled("\n".join(test_str) + "\n")
+        self.assertExpectedStripMangled("\n".join(test_str))
 
     def test_multiline_annot_ast_py3_fn(self):
         code = dedent('''
@@ -12797,7 +12761,7 @@ dedent """
         for pair in self.type_input_return_pairs():
             fn = jit_utils._get_py3_code(self.format_code(code, pair), 'instance')
             test_str.append(str(fn.foo.schema))
-        self.assertExpectedStripMangled("\n".join(test_str) + "\n")
+        self.assertExpectedStripMangled("\n".join(test_str))
 
     #  Python AST Frontend , MyPy-style type comments , Script function
     def test_annot_ast_mypy_fn(self):
@@ -12813,7 +12777,7 @@ dedent """
         for pair in self.type_input_return_pairs():
             fn = jit_utils._get_py3_code(self.format_code(code, pair), 'foo')
             test_str.append(str(fn.schema))
-        self.assertExpected("\n".join(test_str) + "\n")
+        self.assertExpected("\n".join(test_str))
 
     #  Python AST Frontend , MyPy-style type comments , Script method
     def test_annot_ast_mypy_method(self):
@@ -12831,7 +12795,7 @@ dedent """
         for pair in self.type_input_return_pairs():
             fn = jit_utils._get_py3_code(self.format_code(code, pair), 'instance')
             test_str.append(str(fn.foo.schema))
-        self.assertExpectedStripMangled("\n".join(test_str) + "\n")
+        self.assertExpectedStripMangled("\n".join(test_str))
 
     # Tests that "# type: ignore[*]" is supported in type lines and is
     # properly ignored.
@@ -13501,8 +13465,8 @@ dedent """
         self.checkScript(fn, ("y"))
 
         def index_str_to_tensor(s):
-            # type: (str) -> Tensor
-            return torch.tensor(ord(s))  # noqa: T484
+            # type: (str) -> int
+            return torch.tensor(ord(s))
 
         s = u'\u00a3'.encode('utf8')[:1]
         self.checkScript(index_str_to_tensor, (s,))
@@ -14929,7 +14893,7 @@ dedent """
                                                                   attn_mask=mask)[0]
         # print("rel. error: ")
         # print(jit_out / py_out - 1)
-        self.assertEqual(jit_out, py_out, atol=5e-4, rtol=1e-4)
+        self.assertTrue(torch.allclose(jit_out, py_out, atol=5e-4, rtol=1e-4))
 
     @unittest.skipIf(not RUN_CUDA, "no CUDA")
     def test_scriptmodule_multi_head_attn_cuda(self):
@@ -14965,7 +14929,7 @@ dedent """
                                                                   None, None, None, 0.0,
                                                                   model.mod.out_proj.weight,
                                                                   model.mod.out_proj.bias)[0]
-        self.assertEqual(jit_out, py_out, atol=5e-4, rtol=1e-4)
+        self.assertTrue(torch.allclose(jit_out, py_out, atol=5e-4, rtol=1e-4))
 
     @unittest.skipIf(not RUN_CUDA, "no CUDA")
     def test_scriptmodule_transformer_cuda(self):
@@ -15004,7 +14968,7 @@ dedent """
 
         # print(jit_out/py_out-1)
         # print(torch.allclose(jit_out, py_out, atol=5e-4, rtol=1e-4))
-        self.assertEqual(jit_out, py_out, atol=5e-4, rtol=1e-4)
+        self.assertTrue(torch.allclose(jit_out, py_out, atol=5e-4, rtol=1e-4))
 
     def test_list_python_op(self):
         def python_list_op(lst):
@@ -15986,49 +15950,6 @@ class TestJitGeneratedModule(JitTestCase):
 class TestJitGeneratedFunctional(JitTestCase):
     pass
 
-class TestJitAutocast(JitTestCase):
-    def setUp(self):
-        super(TestJitAutocast, self).setUp()
-        self.models = [MnistNet()]
-        self.inputs = [torch.randn(5, 1, 28, 28, device='cpu')]
-
-    def tearDown(self):
-        super(TestJitAutocast, self).tearDown()
-
-    def test_generate_autocast_jit_trace_model(self):
-        def test_generate_autocast_jit_trace_model(model, x):
-            model.eval()
-            with torch.cpu.amp.autocast(cache_enabled=False), torch.no_grad():
-                traced_model = torch.jit.trace(model, x)
-        for i in range(self.models.__len__()):
-            test_generate_autocast_jit_trace_model(self.models[i], self.inputs[i])
-
-    def test_nchw_autocast_jit_trace_model(self):
-        def test_nchw_autocast_jit_trace_model(model, x):
-            model.eval()
-            with torch.cpu.amp.autocast(cache_enabled=False), torch.no_grad():
-                traced_model = torch.jit.trace(model, x)
-            with torch.cpu.amp.autocast(), torch.no_grad():
-                y = traced_model(x.clone())
-                y2 = model(x.clone())
-            torch.testing.assert_allclose(y.double(), y2.double(), rtol=1e-03, atol=1e-03)
-        for i in range(self.models.__len__()):
-            test_nchw_autocast_jit_trace_model(self.models[i], self.inputs[i])
-
-    def test_nhwc_autocast_jit_trace_model(self):
-        def test_nhwc_autocast_jit_trace_model(model, x):
-            model.eval()
-            with torch.cpu.amp.autocast(cache_enabled=False), torch.no_grad():
-                traced_model = torch.jit.trace(model, x.to(memory_format=torch.channels_last))
-            with torch.cpu.amp.autocast(), torch.no_grad():
-                y = traced_model(x.clone().to(memory_format=torch.channels_last))
-                y2 = model(x.clone().to(memory_format=torch.channels_last))
-            torch.testing.assert_allclose(y.double(), y2.double(), rtol=1e-03, atol=1e-03)
-        for i in range(self.models.__len__()):
-            if self.inputs[i].size().__len__() == 5:
-                # NHWC 3D case not support yet
-                continue
-            test_nhwc_autocast_jit_trace_model(self.models[i], self.inputs[i])
 
 # UBSAN per-function exclusions don't seem to work with OpenMP pragmas,
 # and we have to disable the failing tests here instead.

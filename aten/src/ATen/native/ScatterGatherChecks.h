@@ -9,19 +9,17 @@ namespace at { namespace native {
 namespace {
 
 // checks whether index.dtype == int64
-// and self.dtype == src.dtype if src is a Tensor
+// and self.dtyp == src.dtype if src is a Tensor
 static void scatter_gather_dtype_check(
   const std::string& method_name,
   const Tensor& self,
   const Tensor& index,
   const c10::optional<Tensor>& src_opt = c10::nullopt
 ) {
-  if (index.numel() != 0) {
-    TORCH_CHECK(
-      index.scalar_type() == at::ScalarType::Long,
-      method_name, "(): Expected dtype int64 for index"
-    );
-  }
+  TORCH_CHECK(
+    index.scalar_type() == at::ScalarType::Long,
+    method_name, "(): Expected dtype int64 for index"
+  );
 
   if (src_opt.has_value()) {
     auto src = src_opt.value();
@@ -33,31 +31,42 @@ static void scatter_gather_dtype_check(
 }
 
 // Used for `gather`-like methods
-// Note: self means the input tensor here
 // Test:
-// 1. index.size(d) <= self.size(d) for all d != dim
-// 2. index.dim() == self.dim()
+// 1. index.size(d) == self.size(d) for all d != dim
+// 2. index.size(d) <= src.size(d) for all d != dim
+// 3. index.dim() == self.dim() == src.dim()
 static C10_UNUSED void gather_shape_check(const Tensor& self, int64_t dim,
-  const Tensor& index
+  const Tensor& index, const Tensor& src
 ) {
   auto self_dims = ensure_nonempty_dim(self.dim());
   TORCH_CHECK(self_dims == ensure_nonempty_dim(index.dim()),
+    "Index tensor must have the same number of dimensions as out tensor"
+  );
+
+  auto src_dims = ensure_nonempty_dim(src.dim());
+  TORCH_CHECK(src_dims == ensure_nonempty_dim(index.dim()),
     "Index tensor must have the same number of dimensions as input tensor"
   );
 
   for (int64_t i = 0; i < self_dims; ++i) {
     if (i != dim) {
       TORCH_CHECK(
-        ensure_nonempty_size(index, i) <= ensure_nonempty_size(self, i),
+        ensure_nonempty_size(index, i) == ensure_nonempty_size(self, i),
+        "Size does not match at dimension ", i,
+        " get ", ensure_nonempty_size(self, i),
+        " vs ", ensure_nonempty_size(index, i)
+      );
+
+      TORCH_CHECK(
+        ensure_nonempty_size(index, i) <= ensure_nonempty_size(src, i),
         "Size does not match at dimension ", i,
         " expected index ", index.sizes(),
-        " to be smaller than self ", self.sizes(),
+        " to be smaller than src ", src.sizes(),
         " apart from dimension ", dim
       );
     }
   }
 }
-
 // Used for `scatter` and `scatter_add`
 // Tests:
 //  1. index.size(d) <= self.size(d) for all d != dim
@@ -67,7 +76,10 @@ static C10_UNUSED void scatter_shape_check(
   const Tensor& self, int64_t dim, const Tensor& index,
   const c10::optional<Tensor>& src_opt = c10::nullopt
 ) {
-  if (index.numel() == 0) return;
+  if (index.numel() == 0) {
+    return;
+  }
+
   TORCH_CHECK(
     ensure_nonempty_dim(self.dim()) == ensure_nonempty_dim(index.dim()),
     "Index tensor must have the same number of dimensions as self tensor"

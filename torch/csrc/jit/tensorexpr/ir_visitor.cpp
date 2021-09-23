@@ -11,65 +11,61 @@ namespace torch {
 namespace jit {
 namespace tensorexpr {
 
-template <
-    typename Op,
-    typename std::enable_if<std::is_same<
-        decltype(detail::bin_op_deducer(std::declval<Op>())),
-        void>::value>::type* = nullptr>
-static void visit_binary_op(NodePtr<Op> v, IRVisitor* visitor) {
+template <typename Op>
+static void visit_binary_op(BinaryOpNode<Op>* v, IRVisitor* visitor) {
   v->lhs()->accept(visitor);
   v->rhs()->accept(visitor);
 }
 
-void IRVisitor::visit(AddPtr v) {
+void IRVisitor::visit(Add* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(SubPtr v) {
+void IRVisitor::visit(Sub* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(MulPtr v) {
+void IRVisitor::visit(Mul* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(DivPtr v) {
+void IRVisitor::visit(Div* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(ModPtr v) {
+void IRVisitor::visit(Mod* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(MaxPtr v) {
+void IRVisitor::visit(Max* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(MinPtr v) {
+void IRVisitor::visit(Min* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(AndPtr v) {
+void IRVisitor::visit(And* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(OrPtr v) {
+void IRVisitor::visit(Or* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(XorPtr v) {
+void IRVisitor::visit(Xor* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(LshiftPtr v) {
+void IRVisitor::visit(Lshift* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(RshiftPtr v) {
+void IRVisitor::visit(Rshift* v) {
   visit_binary_op(v, this);
 }
 
-void IRVisitor::visit(CompareSelectPtr v) {
+void IRVisitor::visit(CompareSelect* v) {
   v->lhs()->accept(this);
   v->rhs()->accept(this);
   v->ret_val1()->accept(this);
@@ -78,69 +74,69 @@ void IRVisitor::visit(CompareSelectPtr v) {
 
 // NOLINTNEXTLINE
 #define IMM_VISIT(Type, Name) \
-  void IRVisitor::visit(Name##ImmPtr v) {}
-AT_FORALL_SCALAR_TYPES_AND3(Bool, Half, BFloat16, IMM_VISIT);
+  void IRVisitor::visit(Name##Imm* v) {}
+AT_FORALL_SCALAR_TYPES_AND2(Bool, Half, IMM_VISIT);
 #undef IMM_VISIT
 
-void IRVisitor::visit(CastPtr v) {
+void IRVisitor::visit(Cast* v) {
   v->src_value()->accept(this);
 }
-void IRVisitor::visit(BitCastPtr v) {
+void IRVisitor::visit(BitCast* v) {
   v->src_value()->accept(this);
 }
-void IRVisitor::visit(VarPtr v) {}
+void IRVisitor::visit(Var* v) {}
 
-void IRVisitor::visit(RampPtr v) {
+void IRVisitor::visit(Ramp* v) {
   v->base()->accept(this);
   v->stride()->accept(this);
 }
 
-void IRVisitor::visit(LoadPtr v) {
+void IRVisitor::visit(Load* v) {
   v->buf()->accept(this);
-  for (ExprPtr ind : v->indices()) {
+  for (Expr* ind : v->indices()) {
     ind->accept(this);
   }
 }
 
-void IRVisitor::visit(BufPtr v) {
+void IRVisitor::visit(Buf* v) {
   v->base_handle()->accept(this);
 }
 
-void IRVisitor::visit(StorePtr v) {
+void IRVisitor::visit(Store* v) {
   v->buf()->accept(this);
-  for (ExprPtr ind : v->indices()) {
+  for (Expr* ind : v->indices()) {
     ind->accept(this);
   }
   v->value()->accept(this);
 }
 
-void IRVisitor::visit(AtomicAddPtr v) {
+void IRVisitor::visit(AtomicAdd* v) {
   v->buf()->accept(this);
-  for (ExprPtr ind : v->indices()) {
+  for (Expr* ind : v->indices()) {
     ind->accept(this);
   }
   v->value()->accept(this);
 }
 
-void IRVisitor::visit(SyncThreadsPtr v) {}
+void IRVisitor::visit(SyncThreads* v) {}
 
-void IRVisitor::visit(ExternalCallPtr v) {
+void IRVisitor::visit(ExternalCall* v) {
   v->buf()->accept(this);
-  for (BufPtr buf_arg : v->buf_args()) {
+  for (Buf* buf_arg : v->buf_args()) {
     buf_arg->accept(this);
   }
-  for (ExprPtr arg : v->args()) {
+  for (Expr* arg : v->args()) {
     arg->accept(this);
   }
 }
 
-void IRVisitor::visit(BlockPtr v) {
-  for (StmtPtr s : *v) {
+void IRVisitor::visit(Block* v) {
+  for (Stmt* s : *v) {
     s->accept(this);
   }
 }
 
-void IRVisitor::visit(ForPtr v) {
+void IRVisitor::visit(For* v) {
   v->var()->accept(this);
   v->start()->accept(this);
   v->stop()->accept(this);
@@ -149,43 +145,43 @@ void IRVisitor::visit(ForPtr v) {
   }
 }
 
-void IRVisitor::visit(BroadcastPtr v) {
+void IRVisitor::visit(Broadcast* v) {
   v->value()->accept(this);
 }
 
-void IRVisitor::visit(IfThenElsePtr v) {
+void IRVisitor::visit(IfThenElse* v) {
   v->condition()->accept(this);
   v->true_value()->accept(this);
   v->false_value()->accept(this);
 }
 
-void IRVisitor::visit(IntrinsicsPtr v) {
+void IRVisitor::visit(Intrinsics* v) {
   for (const auto i : c10::irange(v->nparams())) {
     v->param(i)->accept(this);
   }
 }
 
-void IRVisitor::visit(AllocatePtr v) {
+void IRVisitor::visit(Allocate* v) {
   v->buffer_var()->accept(this);
-  std::vector<ExprPtr> dims = v->dims();
-  for (ExprPtr dim : dims) {
+  std::vector<Expr*> dims = v->dims();
+  for (Expr* dim : dims) {
     dim->accept(this);
   }
 }
 
-void IRVisitor::visit(FreePtr v) {
+void IRVisitor::visit(Free* v) {
   v->buffer_var()->accept(this);
 }
 
-void IRVisitor::visit(LetPtr v) {
+void IRVisitor::visit(Let* v) {
   v->var()->accept(this);
   v->value()->accept(this);
 }
 
-void IRVisitor::visit(CondPtr v) {
-  ExprPtr condition = v->condition();
-  StmtPtr true_stmt = v->true_stmt();
-  StmtPtr false_stmt = v->false_stmt();
+void IRVisitor::visit(Cond* v) {
+  Expr* condition = v->condition();
+  Stmt* true_stmt = v->true_stmt();
+  Stmt* false_stmt = v->false_stmt();
   condition->accept(this);
   if (true_stmt) {
     true_stmt->accept(this);
@@ -195,47 +191,47 @@ void IRVisitor::visit(CondPtr v) {
   }
 }
 
-void IRVisitor::visit(TermPtr v) {
+void IRVisitor::visit(Term* v) {
   v->scalar()->accept(this);
-  for (auto t : v->variables()) {
+  for (auto* t : v->variables()) {
     t->accept(this);
   }
 }
 
-void IRVisitor::visit(PolynomialPtr v) {
+void IRVisitor::visit(Polynomial* v) {
   v->scalar()->accept(this);
-  for (auto t : v->variables()) {
+  for (auto* t : v->variables()) {
     t->accept(this);
   }
 }
 
-void IRVisitor::visit(RoundOffPtr v) {
+void IRVisitor::visit(RoundOff* v) {
   v->lhs()->accept(this);
   v->rhs()->accept(this);
 }
 
-void IRVisitor::visit(MaxTermPtr v) {
+void IRVisitor::visit(MaxTerm* v) {
   if (v->scalar()) {
     v->scalar()->accept(this);
   }
-  for (auto t : v->variables()) {
+  for (auto* t : v->variables()) {
     t->accept(this);
   }
 }
 
-void IRVisitor::visit(MinTermPtr v) {
+void IRVisitor::visit(MinTerm* v) {
   if (v->scalar()) {
     v->scalar()->accept(this);
   }
-  for (auto t : v->variables()) {
+  for (auto* t : v->variables()) {
     t->accept(this);
   }
 }
 
-void IRVisitor::visit(ReduceOpPtr v) {
+void IRVisitor::visit(ReduceOp* v) {
   v->body()->accept(this);
 
-  for (auto r : v->reduce_args()) {
+  for (auto* r : v->reduce_args()) {
     r->accept(this);
   }
 }

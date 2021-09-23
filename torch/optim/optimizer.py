@@ -100,8 +100,7 @@ class Optimizer(object):
 
         * state - a dict holding current optimization state. Its content
             differs between optimizer classes.
-        * param_groups - a list containing all parameter groups where each
-            parameter group is a dict
+        * param_groups - a dict containing all parameter groups
         """
         # Save order indices instead of Tensors
         param_mappings = {}

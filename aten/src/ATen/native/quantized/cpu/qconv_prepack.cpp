@@ -276,8 +276,9 @@ c10::intrusive_ptr<ConvPackedParamsBase<kSpatialDim>> PackedConvWeightsQnnp<
   // during the first invocation of operator run. Refer to qconv.cpp for more
   // details. TODO Update to actually call pre-pack here once bias is removed
   // from pre-packing step.
-  auto ret_ptr =
-      c10::intrusive_ptr<PackedConvWeightsQnnp<kSpatialDim>>::make(
+  c10::intrusive_ptr<ConvPackedParamsBase<kSpatialDim>> ret_ptr =
+      c10::make_intrusive<PackedConvWeightsQnnp<kSpatialDim>>(
+          PackedConvWeightsQnnp<kSpatialDim>{
               nullptr, /* PrePackConvWeights */
               weight_contig, /* int8_t weight */
               bias_fp32.contiguous(), /* fp32 bias */
@@ -288,10 +289,10 @@ c10::intrusive_ptr<ConvPackedParamsBase<kSpatialDim>> PackedConvWeightsQnnp<
               groups,
               transpose,
               c10::nullopt, /* input_scale */
-              std::vector<int64_t>{kernel_h, kernel_w},
+              {kernel_h, kernel_w},
               w_scales,
               std::move(w_zero_points),
-              is_per_channel);
+              is_per_channel});
 
   return ret_ptr;
 }

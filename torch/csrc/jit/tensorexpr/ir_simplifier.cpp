@@ -6,70 +6,6 @@ namespace torch {
 namespace jit {
 namespace tensorexpr {
 
-// Creates a new Expr of the given type with the provided lhs and rhs.
-inline ExprPtr newBinaryOpOfType(
-    IRNodeType expr_type,
-    ExprPtr lhs,
-    ExprPtr rhs,
-    bool option) {
-  switch (expr_type) {
-    // NOLINTNEXTLINE(bugprone-branch-clone)
-    case IRNodeType::kAdd:
-      return alloc<Add>(lhs, rhs);
-    case IRNodeType::kSub:
-      return alloc<Sub>(lhs, rhs);
-    case IRNodeType::kMul:
-      return alloc<Mul>(lhs, rhs);
-    case IRNodeType::kDiv:
-      return alloc<Div>(lhs, rhs);
-    case IRNodeType::kMod:
-      return alloc<Mod>(lhs, rhs);
-    case IRNodeType::kMax:
-      return alloc<Max>(lhs, rhs, option);
-    case IRNodeType::kMin:
-      return alloc<Min>(lhs, rhs, option);
-    case IRNodeType::kAnd:
-      return alloc<And>(lhs, rhs);
-    case IRNodeType::kXor:
-      return alloc<Xor>(lhs, rhs);
-    case IRNodeType::kLshift:
-      return alloc<Lshift>(lhs, rhs);
-    case IRNodeType::kRshift:
-      return alloc<Rshift>(lhs, rhs);
-    default:
-      LOG(FATAL) << "unsupported expr_type: " << static_cast<int>(expr_type);
-      return nullptr;
-  }
-}
-
-template <
-    typename Op,
-    typename std::enable_if<std::is_same<
-        decltype(detail::bin_op_deducer(std::declval<Op>())),
-        void>::value>::type* = nullptr>
-static ExprPtr mutateBinaryOp(
-    NodePtr<Op> v,
-    IRMutator* mutator,
-    bool option = false) {
-  ExprPtr lhs = v->lhs();
-  ExprPtr rhs = v->rhs();
-  ExprPtr lhs_new = lhs->accept_mutator(mutator);
-  ExprPtr rhs_new = rhs->accept_mutator(mutator);
-
-  ExprPtr node = v;
-
-  if (lhs != lhs_new || rhs != rhs_new) {
-    node = newBinaryOpOfType(v->expr_type(), lhs_new, rhs_new, option);
-  }
-
-  // Can only fold if both sides are constant.
-  if (!lhs_new->isConstant() || !rhs_new->isConstant()) {
-    return node;
-  }
-
-  return evaluateOp(node);
-}
-
 // Simple recursive GCD.
 template <typename T>
 T gcd(T a, T b) {
@@ -81,13 +17,13 @@ T gcd(T a, T b) {
 
 // Helper for determining if an Expr is a multi-lane primitive (e.g. Broadcast
 // or Ramp).
-bool isMultilanePrimitive(ExprPtr e) {
-  return to<Broadcast>(e) || to<Ramp>(e);
+bool isMultilanePrimitive(Expr* e) {
+  return dynamic_cast<Broadcast*>(e) || dynamic_cast<Ramp*>(e);
 }
 
 SimplifierHashType Term::hashVars() const {
   SimplifierHashType hash;
-  for (auto v : variables_) {
+  for (auto* v : variables_) {
     hash = hasher_.hash_combine(hash, hasher_.hash(v));
   }
 
@@ -99,21 +35,14 @@ void Term::sort() {
   if (dtype().is_floating_point()) {
     throw std::logic_error("reordering FP ops");
   }
-  std::unordered_map<ExprPtr, std::string> str_repr_cache;
-  std::sort(variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
-    if (!str_repr_cache.count(a)) {
-      str_repr_cache[a] = std::to_string(a);
-    }
-    if (!str_repr_cache.count(b)) {
-      str_repr_cache[b] = std::to_string(b);
-    }
-    return str_repr_cache.at(a) < str_repr_cache.at(b);
+  std::sort(variables_.begin(), variables_.end(), [&](Expr* a, Expr* b) {
+    return hasher_.hash(a) < hasher_.hash(b);
   });
 }
 
 SimplifierHashType Polynomial::hashVars() const {
   SimplifierHashType hash;
-  for (auto v : variables_) {
+  for (auto* v : variables_) {
     hash = hasher_.hash_combine(hash, hasher_.hash(v));
   }
   return hash;
@@ -123,106 +52,75 @@ void Polynomial::sort() {
   if (dtype().is_floating_point()) {
     throw std::logic_error("reordering FP ops");
   }
-  std::unordered_map<ExprPtr, std::string> str_repr_cache;
-  std::sort(variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
-    if (!str_repr_cache.count(a)) {
-      str_repr_cache[a] = std::to_string(a);
-    }
-    if (!str_repr_cache.count(b)) {
-      str_repr_cache[b] = std::to_string(b);
-    }
-    return str_repr_cache.at(a) < str_repr_cache.at(b);
+  std::sort(variables_.begin(), variables_.end(), [&](Expr* a, Expr* b) {
+    return hasher_.hash(a) < hasher_.hash(b);
   });
 }
 
 void MaxTerm::uniquefy() {
-  std::sort(variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
+  std::sort(variables_.begin(), variables_.end(), [&](Expr* a, Expr* b) {
     return hasher_.hash(a) < hasher_.hash(b);
   });
-  auto it = std::unique(
-      variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
+  auto it =
+      std::unique(variables_.begin(), variables_.end(), [&](Expr* a, Expr* b) {
         return hasher_.hash(a) == hasher_.hash(b);
       });
   variables_.resize(std::distance(variables_.begin(), it));
-
-  // Once we removed duplicates, sort terms alphabetically for stability.
-  std::unordered_map<ExprPtr, std::string> str_repr_cache;
-  std::sort(variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
-    if (!str_repr_cache.count(a)) {
-      str_repr_cache[a] = std::to_string(a);
-    }
-    if (!str_repr_cache.count(b)) {
-      str_repr_cache[b] = std::to_string(b);
-    }
-    return str_repr_cache.at(a) < str_repr_cache.at(b);
-  });
 }
 
 void MinTerm::uniquefy() {
-  std::sort(variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
+  std::sort(variables_.begin(), variables_.end(), [&](Expr* a, Expr* b) {
     return hasher_.hash(a) < hasher_.hash(b);
   });
-  auto it = std::unique(
-      variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
+  auto it =
+      std::unique(variables_.begin(), variables_.end(), [&](Expr* a, Expr* b) {
         return hasher_.hash(a) == hasher_.hash(b);
       });
   variables_.resize(std::distance(variables_.begin(), it));
-
-  // Once we removed duplicates, sort terms alphabetically for stability.
-  std::unordered_map<ExprPtr, std::string> str_repr_cache;
-  std::sort(variables_.begin(), variables_.end(), [&](ExprPtr a, ExprPtr b) {
-    if (!str_repr_cache.count(a)) {
-      str_repr_cache[a] = std::to_string(a);
-    }
-    if (!str_repr_cache.count(b)) {
-      str_repr_cache[b] = std::to_string(b);
-    }
-    return str_repr_cache.at(a) < str_repr_cache.at(b);
-  });
 }
 
 // Handles optimization cases for Broadcast/Ramp +/- Broadcast/Ramp
 template <class Op>
-ExprPtr combineMultilane(ExprPtr lhs, ExprPtr rhs) {
-  if (BroadcastPtr bc = to<Broadcast>(lhs)) {
-    if (BroadcastPtr bcother = to<Broadcast>(rhs)) {
+Expr* combineMultilane(Expr* lhs, Expr* rhs) {
+  if (Broadcast* bc = dynamic_cast<Broadcast*>(lhs)) {
+    if (Broadcast* bcother = dynamic_cast<Broadcast*>(rhs)) {
       if (bc->lanes() != bcother->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
 
-      ExprPtr ret = alloc<Broadcast>(
-          alloc<Op>(bc->value(), bcother->value()), bc->lanes());
+      Expr* ret =
+          new Broadcast(new Op(bc->value(), bcother->value()), bc->lanes());
       return ret;
     }
 
-    if (RampPtr r = to<Ramp>(rhs)) {
+    if (Ramp* r = dynamic_cast<Ramp*>(rhs)) {
       if (bc->lanes() != r->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
 
-      ExprPtr ret = alloc<Ramp>(
-          alloc<Op>(bc->value(), r->base()), r->stride(), r->lanes());
+      Expr* ret =
+          new Ramp(new Op(bc->value(), r->base()), r->stride(), r->lanes());
       return ret;
     }
-  } else if (RampPtr ramp = to<Ramp>(lhs)) {
-    if (RampPtr rother = to<Ramp>(rhs)) {
+  } else if (Ramp* ramp = dynamic_cast<Ramp*>(lhs)) {
+    if (Ramp* rother = dynamic_cast<Ramp*>(rhs)) {
       if (ramp->lanes() != rother->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
 
-      ExprPtr ret = alloc<Ramp>(
-          alloc<Op>(ramp->base(), rother->base()),
-          alloc<Op>(ramp->stride(), rother->stride()),
+      Expr* ret = new Ramp(
+          new Op(ramp->base(), rother->base()),
+          new Op(ramp->stride(), rother->stride()),
           ramp->lanes());
       return ret;
     }
 
-    if (BroadcastPtr bc = to<Broadcast>(rhs)) {
+    if (Broadcast* bc = dynamic_cast<Broadcast*>(rhs)) {
       if (ramp->lanes() != bc->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
-      ExprPtr ret = alloc<Ramp>(
-          alloc<Op>(ramp->base(), bc->value()), ramp->stride(), ramp->lanes());
+      Expr* ret = new Ramp(
+          new Op(ramp->base(), bc->value()), ramp->stride(), ramp->lanes());
       return ret;
     }
   }
@@ -231,50 +129,50 @@ ExprPtr combineMultilane(ExprPtr lhs, ExprPtr rhs) {
 }
 
 // Handles optimization cases for Broadcast/Ramp * Broadcast/Ramp
-ExprPtr mulMultilane(ExprPtr lhs, ExprPtr rhs) {
-  if (BroadcastPtr bc = to<Broadcast>(lhs)) {
-    if (BroadcastPtr bcother = to<Broadcast>(rhs)) {
+Expr* mulMultilane(Expr* lhs, Expr* rhs) {
+  if (Broadcast* bc = dynamic_cast<Broadcast*>(lhs)) {
+    if (Broadcast* bcother = dynamic_cast<Broadcast*>(rhs)) {
       if (bc->lanes() != bcother->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
 
-      ExprPtr ret = alloc<Broadcast>(
-          alloc<Mul>(bc->value(), bcother->value()), bc->lanes());
+      Expr* ret =
+          new Broadcast(new Mul(bc->value(), bcother->value()), bc->lanes());
       return ret;
     }
 
-    if (RampPtr r = to<Ramp>(rhs)) {
+    if (Ramp* r = dynamic_cast<Ramp*>(rhs)) {
       if (bc->lanes() != r->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
 
-      ExprPtr ret = alloc<Ramp>(
-          alloc<Mul>(bc->value(), r->base()),
-          alloc<Mul>(bc->value(), r->stride()),
+      Expr* ret = new Ramp(
+          new Mul(bc->value(), r->base()),
+          new Mul(bc->value(), r->stride()),
           r->lanes());
       return ret;
     }
-  } else if (RampPtr ramp = to<Ramp>(lhs)) {
-    if (RampPtr r = to<Ramp>(rhs)) {
+  } else if (Ramp* ramp = dynamic_cast<Ramp*>(lhs)) {
+    if (Ramp* r = dynamic_cast<Ramp*>(rhs)) {
       if (ramp->lanes() != r->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
 
-      ExprPtr ret = alloc<Ramp>(
-          alloc<Mul>(ramp->base(), r->base()),
-          alloc<Mul>(ramp->stride(), r->stride()),
+      Expr* ret = new Ramp(
+          new Mul(ramp->base(), r->base()),
+          new Mul(ramp->stride(), r->stride()),
           r->lanes());
       return ret;
     }
 
-    if (BroadcastPtr bc = to<Broadcast>(rhs)) {
+    if (Broadcast* bc = dynamic_cast<Broadcast*>(rhs)) {
       if (ramp->lanes() != bc->lanes()) {
         throw malformed_input("multilane lane mismatch");
       }
 
-      ExprPtr ret = alloc<Ramp>(
-          alloc<Mul>(bc->value(), ramp->base()),
-          alloc<Mul>(bc->value(), ramp->stride()),
+      Expr* ret = new Ramp(
+          new Mul(bc->value(), ramp->base()),
+          new Mul(bc->value(), ramp->stride()),
           ramp->lanes());
       return ret;
     }
@@ -284,13 +182,13 @@ ExprPtr mulMultilane(ExprPtr lhs, ExprPtr rhs) {
 }
 
 void PolynomialTransformer::addOrUpdateTerm(
-    std::unordered_map<SimplifierHashType, TermPtr>& varmap,
-    TermPtr term) {
+    std::unordered_map<SimplifierHashType, Term*>& varmap,
+    Term* term) {
   SimplifierHashType hash = term->hashVars();
   auto insertRes = varmap.emplace(hash, term);
   if (insertRes.second == false) {
-    TermPtr lt = insertRes.first->second;
-    ExprPtr termScalar = evaluateOp(alloc<Add>(lt->scalar(), term->scalar()));
+    Term* lt = insertRes.first->second;
+    Expr* termScalar = evaluateOp(new Add(lt->scalar(), term->scalar()));
 
     // If the term is canceled out, remove from the map.
     if (immediateEquals(termScalar, 0)) {
@@ -298,45 +196,43 @@ void PolynomialTransformer::addOrUpdateTerm(
       return;
     }
 
-    varmap[hash] = alloc<Term>(hasher_, termScalar, lt->variables());
+    varmap[hash] = new Term(hasher_, termScalar, lt->variables());
   }
 }
 
-ExprPtr PolynomialTransformer::addPolynomials(
-    PolynomialPtr lhs,
-    PolynomialPtr rhs) {
+Expr* PolynomialTransformer::addPolynomials(Polynomial* lhs, Polynomial* rhs) {
   // simplify common components
   // The key here is the variable hash, not the term's hash since we do want
   // to combine terms that have the same vars but different scalar components.
-  std::unordered_map<SimplifierHashType, TermPtr> varmap;
+  std::unordered_map<SimplifierHashType, Term*> varmap;
 
-  for (auto lt : lhs->variables()) {
+  for (auto* lt : lhs->variables()) {
     addOrUpdateTerm(varmap, lt);
   }
-  for (auto rt : rhs->variables()) {
+  for (auto* rt : rhs->variables()) {
     addOrUpdateTerm(varmap, rt);
   }
 
-  ExprPtr newScalar = evaluateOp(alloc<Add>(lhs->scalar(), rhs->scalar()));
-  return alloc<Polynomial>(hasher_, newScalar, varmap);
+  Expr* newScalar = evaluateOp(new Add(lhs->scalar(), rhs->scalar()));
+  return new Polynomial(hasher_, newScalar, varmap);
 }
 
 // Insert a new Term into the provided polynomial. If the new term has common
 // variables to an existing term it is combined.
-ExprPtr PolynomialTransformer::insertTerm(PolynomialPtr poly, TermPtr term) {
+Expr* PolynomialTransformer::insertTerm(Polynomial* poly, Term* term) {
   SimplifierHashType tHash = term->hashVars();
-  std::vector<TermPtr> newVars;
+  std::vector<Term*> newVars;
 
   bool found = false;
-  for (auto v : poly->variables()) {
+  for (auto* v : poly->variables()) {
     if (v->hashVars() == tHash) {
-      ExprPtr newScalar = evaluateOp(alloc<Add>(term->scalar(), v->scalar()));
+      Expr* newScalar = evaluateOp(new Add(term->scalar(), v->scalar()));
       found = true;
       // Skip this term if we cancelled it out.
       if (immediateEquals(newScalar, 0)) {
         continue;
       }
-      auto term = alloc<Term>(hasher_, newScalar, v->variables());
+      auto* term = new Term(hasher_, newScalar, v->variables());
       newVars.push_back(term);
     } else {
       newVars.push_back(v);
@@ -351,29 +247,29 @@ ExprPtr PolynomialTransformer::insertTerm(PolynomialPtr poly, TermPtr term) {
     return poly->scalar();
   }
 
-  auto Poly = alloc<Polynomial>(hasher_, poly->scalar(), newVars);
+  auto* Poly = new Polynomial(hasher_, poly->scalar(), newVars);
   return Poly;
 }
 
-ExprPtr PolynomialTransformer::mutate(AddPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Add* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    ExprPtr result = evaluateOp(alloc<Add>(lhs_new, rhs_new));
+    Expr* result = evaluateOp(new Add(lhs_new, rhs_new));
     return result;
   }
 
   // Multilane folding.
   if (isMultilanePrimitive(lhs_new)) {
-    if (auto ret = combineMultilane<Add>(lhs_new, rhs_new)) {
+    if (auto* ret = combineMultilane<Add>(lhs_new, rhs_new)) {
       return ret->accept_mutator(this);
     }
   }
 
-  ExprPtr scalar = nullptr;
-  ExprPtr variable = nullptr;
+  Expr* scalar = nullptr;
+  Expr* variable = nullptr;
   if (lhs_new->isConstant()) {
     scalar = evaluateOp(lhs_new);
     variable = rhs_new;
@@ -385,7 +281,7 @@ ExprPtr PolynomialTransformer::mutate(AddPtr v) {
   // If there is a scalar, and it's zero: short circuit and return the other
   // side.
   if (scalar && immediateEquals(scalar, 0)) {
-    auto c = alloc<Cast>(v->dtype(), variable);
+    auto* c = new Cast(v->dtype(), variable);
     return c->accept_mutator(this);
   }
 
@@ -393,18 +289,18 @@ ExprPtr PolynomialTransformer::mutate(AddPtr v) {
   // dont want to combine ops.
   if (lhs_new->dtype().is_floating_point() ||
       rhs_new->dtype().is_floating_point()) {
-    return alloc<Add>(lhs_new, rhs_new);
+    return new Add(lhs_new, rhs_new);
   }
 
-  PolynomialPtr lhsPoly = to<Polynomial>(lhs_new);
-  PolynomialPtr rhsPoly = to<Polynomial>(rhs_new);
+  Polynomial* lhsPoly = dynamic_cast<Polynomial*>(lhs_new);
+  Polynomial* rhsPoly = dynamic_cast<Polynomial*>(rhs_new);
 
   if (lhsPoly && rhsPoly) {
     return addPolynomials(lhsPoly, rhsPoly);
   }
 
-  TermPtr lhsTerm = to<Term>(lhs_new);
-  TermPtr rhsTerm = to<Term>(rhs_new);
+  Term* lhsTerm = dynamic_cast<Term*>(lhs_new);
+  Term* rhsTerm = dynamic_cast<Term*>(rhs_new);
 
   if (lhsPoly && rhsTerm) {
     return insertTerm(lhsPoly, rhsTerm);
@@ -417,51 +313,54 @@ ExprPtr PolynomialTransformer::mutate(AddPtr v) {
   if (lhsTerm && rhsTerm) {
     // If the terms refer to the same variables: combine them.
     if (lhsTerm->hashVars() == rhsTerm->hashVars()) {
-      ExprPtr newScalar =
-          evaluateOp(alloc<Add>(lhsTerm->scalar(), rhsTerm->scalar()));
+      Expr* newScalar =
+          evaluateOp(new Add(lhsTerm->scalar(), rhsTerm->scalar()));
 
       // If the terms cancelled out, return zero.
       if (immediateEquals(newScalar, 0)) {
         return newScalar->accept_mutator(this);
       }
 
-      return alloc<Term>(hasher_, newScalar, lhsTerm->variables());
+      return new Term(hasher_, newScalar, lhsTerm->variables());
     }
 
     // Otherwise this is a new polynomial with no scalar and two variable
     // terms.
-    return alloc<Polynomial>(hasher_, immLike(v, 0), lhsTerm, rhsTerm);
+    return new Polynomial(
+        hasher_, getImmediateByType(v->dtype(), 0), lhsTerm, rhsTerm);
   }
 
   // Adds are commutative.
-  PolynomialPtr poly = lhsPoly ? lhsPoly : rhsPoly;
+  Polynomial* poly = lhsPoly ? lhsPoly : rhsPoly;
 
   // Add to Polynomial->scalar().
   if (scalar && poly) {
-    ExprPtr newScalar = evaluateOp(alloc<Add>(scalar, poly->scalar()));
-    return alloc<Polynomial>(hasher_, newScalar, poly->variables());
+    Expr* newScalar = evaluateOp(new Add(scalar, poly->scalar()));
+    return new Polynomial(hasher_, newScalar, poly->variables());
   }
 
   // Simple Polynomial with a scalar and Term.
-  TermPtr term = lhsTerm ? lhsTerm : rhsTerm;
+  Term* term = lhsTerm ? lhsTerm : rhsTerm;
   if (scalar && term) {
-    return alloc<Polynomial>(hasher_, scalar, term);
+    return new Polynomial(hasher_, scalar, term);
   }
 
   // Simple Term with a scalar and variable type.
   if (scalar) {
-    return alloc<Polynomial>(
-        hasher_, scalar, alloc<Term>(hasher_, immLike(v, 1), variable));
+    return new Polynomial(
+        hasher_,
+        scalar,
+        new Term(hasher_, getImmediateByType(v->dtype(), 1), variable));
   }
 
   // If LHS is neither Term not Polynomial, wrap it in a Term.
   if (!lhsTerm && !lhsPoly) {
-    lhsTerm = alloc<Term>(hasher_, immLike(v, 1), lhs_new);
+    lhsTerm = new Term(hasher_, getImmediateByType(v->dtype(), 1), lhs_new);
   }
 
   // Same for RHS.
   if (!rhsTerm && !rhsPoly) {
-    rhsTerm = alloc<Term>(hasher_, immLike(v, 1), rhs_new);
+    rhsTerm = new Term(hasher_, getImmediateByType(v->dtype(), 1), rhs_new);
   }
 
   // If we now have a poly and a term, we can insert.
@@ -470,39 +369,37 @@ ExprPtr PolynomialTransformer::mutate(AddPtr v) {
   }
 
   if (lhsTerm->hashVars() == rhsTerm->hashVars()) {
-    return alloc<Term>(
+    return new Term(
         hasher_,
-        evaluateOp(alloc<Add>(lhsTerm->scalar(), rhsTerm->scalar())),
+        evaluateOp(new Add(lhsTerm->scalar(), rhsTerm->scalar())),
         lhsTerm->variables());
   }
 
   // If all else fails we have a new Polynomial with two new variable Terms.
-  return alloc<Polynomial>(hasher_, immLike(v, 0), lhsTerm, rhsTerm);
+  return new Polynomial(
+      hasher_, getImmediateByType(v->dtype(), 0), lhsTerm, rhsTerm);
 }
 
-ExprPtr PolynomialTransformer::subTerms(
-    TermPtr lhs,
-    TermPtr rhs,
-    bool negated) {
+Expr* PolynomialTransformer::subTerms(Term* lhs, Term* rhs, bool negated) {
   // If RHS not already negated, negate it.
   if (!negated) {
-    ExprPtr minusOne = immLike(rhs, -1);
-    ExprPtr negateScalar = evaluateOp(alloc<Mul>(minusOne, rhs->scalar()));
-    rhs = alloc<Term>(hasher_, negateScalar, rhs->variables());
+    Expr* minusOne = getImmediateByType(rhs->dtype(), -1);
+    Expr* negateScalar = evaluateOp(new Mul(minusOne, rhs->scalar()));
+    rhs = new Term(hasher_, negateScalar, rhs->variables());
   }
 
   if (lhs->hashVars() == rhs->hashVars()) {
-    ExprPtr newScalar = evaluateOp(alloc<Add>(lhs->scalar(), rhs->scalar()));
+    Expr* newScalar = evaluateOp(new Add(lhs->scalar(), rhs->scalar()));
 
     // If the terms cancel out, return zero.
     if (immediateEquals(newScalar, 0)) {
       return newScalar;
     }
 
-    return alloc<Term>(hasher_, newScalar, lhs->variables());
+    return new Term(hasher_, newScalar, lhs->variables());
   }
 
-  return alloc<Polynomial>(
+  return new Polynomial(
       hasher_,
       getImmediateByType(promoteTypes(lhs->dtype(), rhs->dtype()), 0),
       lhs,
@@ -511,26 +408,25 @@ ExprPtr PolynomialTransformer::subTerms(
 
 // Subtract the RHS Polynomial from the LHS Polynomial, cancelling out where
 // possible.
-ExprPtr PolynomialTransformer::subPolynomials(
-    PolynomialPtr lhs,
-    PolynomialPtr rhs) {
+Expr* PolynomialTransformer::subPolynomials(Polynomial* lhs, Polynomial* rhs) {
   // simplify common components
   // The key here is the variable hash, not the term's hash since we do want
   // to combine terms that have the same vars but different scalar components.
-  std::unordered_map<SimplifierHashType, TermPtr> varmap;
+  std::unordered_map<SimplifierHashType, Term*> varmap;
 
-  for (auto lt : lhs->variables()) {
+  for (auto* lt : lhs->variables()) {
     addOrUpdateTerm(varmap, lt);
   }
 
-  for (auto rt : rhs->variables()) {
+  for (auto* rt : rhs->variables()) {
     // Polynomials add their terms, so negate the RHS's Terms.
-    ExprPtr negated = evaluateOp(alloc<Mul>(immLike(rt, -1), rt->scalar()));
-    TermPtr newRHS = alloc<Term>(hasher_, negated, rt->variables());
+    Expr* negated =
+        evaluateOp(new Mul(getImmediateByType(rt->dtype(), -1), rt->scalar()));
+    Term* newRHS = new Term(hasher_, negated, rt->variables());
     addOrUpdateTerm(varmap, newRHS);
   }
 
-  ExprPtr newScalar = evaluateOp(alloc<Sub>(lhs->scalar(), rhs->scalar()));
+  Expr* newScalar = evaluateOp(new Sub(lhs->scalar(), rhs->scalar()));
 
   // No vars means this cancelled out to a scalar, return it unwrapped.
   if (varmap.empty()) {
@@ -548,29 +444,29 @@ ExprPtr PolynomialTransformer::subPolynomials(
   }
 
   // Wrap new variables in a Polynomial.
-  return alloc<Polynomial>(hasher_, newScalar, varmap);
+  return new Polynomial(hasher_, newScalar, varmap);
 }
 
-ExprPtr PolynomialTransformer::mutate(SubPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Sub* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    ExprPtr result = evaluateOp(alloc<Sub>(lhs_new, rhs_new));
+    Expr* result = evaluateOp(new Sub(lhs_new, rhs_new));
     return result;
   }
 
   // Multilane folding.
   if (isMultilanePrimitive(lhs_new)) {
-    if (auto ret = combineMultilane<Sub>(lhs_new, rhs_new)) {
+    if (auto* ret = combineMultilane<Sub>(lhs_new, rhs_new)) {
       // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
       return ret->accept_mutator(this);
     }
   }
 
   if (rhs_new->isConstant() && immediateEquals(rhs_new, 0)) {
-    auto c = alloc<Cast>(v->dtype(), lhs_new);
+    auto* c = new Cast(v->dtype(), lhs_new);
     // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
     return c->accept_mutator(this);
   }
@@ -579,46 +475,46 @@ ExprPtr PolynomialTransformer::mutate(SubPtr v) {
   // dont want to combine ops.
   if (lhs_new->dtype().is_floating_point() ||
       rhs_new->dtype().is_floating_point()) {
-    return alloc<Sub>(lhs_new, rhs_new);
+    return new Sub(lhs_new, rhs_new);
   }
 
-  PolynomialPtr lhsPoly = to<Polynomial>(lhs_new);
-  PolynomialPtr rhsPoly = to<Polynomial>(rhs_new);
+  Polynomial* lhsPoly = dynamic_cast<Polynomial*>(lhs_new);
+  Polynomial* rhsPoly = dynamic_cast<Polynomial*>(rhs_new);
 
   if (lhsPoly && rhsPoly) {
-    auto ret = subPolynomials(lhsPoly, rhsPoly);
+    auto* ret = subPolynomials(lhsPoly, rhsPoly);
     if (!ret) {
       // Cancelled out completely.
-      return immLike(v, 0);
+      return getImmediateByType(v->dtype(), 0);
     }
     return ret;
   }
 
-  TermPtr lhsTerm = to<Term>(lhs_new);
-  TermPtr rhsTerm = to<Term>(rhs_new);
+  Term* lhsTerm = dynamic_cast<Term*>(lhs_new);
+  Term* rhsTerm = dynamic_cast<Term*>(rhs_new);
 
   // Polynomial - Term.
   if (lhsPoly && rhsTerm) {
     // Negate the term.
-    ExprPtr negate =
-        evaluateOp(alloc<Mul>(immLike(rhsTerm, -1), rhsTerm->scalar()));
-    TermPtr newTerm = alloc<Term>(hasher_, negate, rhsTerm->variables());
+    Expr* negate = evaluateOp(
+        new Mul(getImmediateByType(rhsTerm->dtype(), -1), rhsTerm->scalar()));
+    Term* newTerm = new Term(hasher_, negate, rhsTerm->variables());
     return insertTerm(lhsPoly, newTerm);
   }
 
   // Term - Polynomial.
   if (rhsPoly && lhsTerm) {
     // Negate every part of the Polynomial.
-    ExprPtr minusOne = immLike(lhsTerm, -1);
-    ExprPtr negateScalar = evaluateOp(alloc<Mul>(minusOne, rhsPoly->scalar()));
+    Expr* minusOne = getImmediateByType(lhsTerm->dtype(), -1);
+    Expr* negateScalar = evaluateOp(new Mul(minusOne, rhsPoly->scalar()));
 
-    std::vector<TermPtr> variables;
-    for (auto t : rhsPoly->variables()) {
-      ExprPtr negate = evaluateOp(alloc<Mul>(minusOne, t->scalar()));
-      variables.push_back(alloc<Term>(hasher_, negate, t->variables()));
+    std::vector<Term*> variables;
+    for (auto* t : rhsPoly->variables()) {
+      Expr* negate = evaluateOp(new Mul(minusOne, t->scalar()));
+      variables.push_back(new Term(hasher_, negate, t->variables()));
     }
 
-    PolynomialPtr newPoly = alloc<Polynomial>(hasher_, negateScalar, variables);
+    Polynomial* newPoly = new Polynomial(hasher_, negateScalar, variables);
     return insertTerm(newPoly, lhsTerm);
   }
 
@@ -631,62 +527,68 @@ ExprPtr PolynomialTransformer::mutate(SubPtr v) {
 
   if (lhsPoly && rhsScalar) {
     // Easy path, just sub the scalar component.
-    ExprPtr newScalar = evaluateOp(alloc<Sub>(lhsPoly->scalar(), rhs_new));
-    return alloc<Polynomial>(hasher_, newScalar, lhsPoly->variables());
+    Expr* newScalar = evaluateOp(new Sub(lhsPoly->scalar(), rhs_new));
+    return new Polynomial(hasher_, newScalar, lhsPoly->variables());
   }
 
   if (lhsScalar && rhsPoly) {
     // Sub the scalar component.
-    ExprPtr newScalar = evaluateOp(alloc<Sub>(lhs_new, rhsPoly->scalar()));
+    Expr* newScalar = evaluateOp(new Sub(lhs_new, rhsPoly->scalar()));
 
     // Negate each term in the Polynomial RHS.
-    ExprPtr minusOne = immLike(rhsPoly, -1);
-    std::vector<TermPtr> variables;
-    for (auto t : rhsPoly->variables()) {
-      ExprPtr negate = evaluateOp(alloc<Mul>(minusOne, t->scalar()));
-      variables.push_back(alloc<Term>(hasher_, negate, t->variables()));
+    Expr* minusOne = getImmediateByType(rhsPoly->dtype(), -1);
+    std::vector<Term*> variables;
+    for (auto* t : rhsPoly->variables()) {
+      Expr* negate = evaluateOp(new Mul(minusOne, t->scalar()));
+      variables.push_back(new Term(hasher_, negate, t->variables()));
     }
 
-    return alloc<Polynomial>(hasher_, newScalar, variables);
+    return new Polynomial(hasher_, newScalar, variables);
   }
 
   if (lhsTerm && rhsScalar) {
     // Negate the constant.
-    ExprPtr negate = evaluateOp(alloc<Mul>(immLike(rhs_new, -1), rhs_new));
-    return alloc<Polynomial>(hasher_, negate, lhsTerm);
+    Expr* negate =
+        evaluateOp(new Mul(getImmediateByType(rhs_new->dtype(), -1), rhs_new));
+    return new Polynomial(hasher_, negate, lhsTerm);
   }
 
   if (lhsScalar && rhsTerm) {
     // Negate the RHS Term.
-    ExprPtr negate = evaluateOp(
-        alloc<Mul>(immLike(rhsTerm->scalar(), -1), rhsTerm->scalar()));
+    Expr* negate = evaluateOp(new Mul(
+        getImmediateByType(rhsTerm->scalar()->dtype(), -1), rhsTerm->scalar()));
 
-    return alloc<Polynomial>(
-        hasher_, lhs_new, alloc<Term>(hasher_, negate, rhsTerm->variables()));
+    return new Polynomial(
+        hasher_, lhs_new, new Term(hasher_, negate, rhsTerm->variables()));
   }
 
   // simple term with a scalar and variable type.
   if (lhsScalar) {
     // Create a negated term.
-    return alloc<Polynomial>(
-        hasher_, lhs_new, alloc<Term>(hasher_, immLike(v, -1), rhs_new));
+    return new Polynomial(
+        hasher_,
+        lhs_new,
+        new Term(hasher_, getImmediateByType(v->dtype(), -1), rhs_new));
   }
 
   if (rhsScalar) {
     // Negate the scalar.
-    ExprPtr negate = evaluateOp(alloc<Mul>(immLike(rhs_new, -1), rhs_new));
-    return alloc<Polynomial>(
-        hasher_, negate, alloc<Term>(hasher_, immLike(v, 1), lhs_new));
+    Expr* negate =
+        evaluateOp(new Mul(getImmediateByType(rhs_new->dtype(), -1), rhs_new));
+    return new Polynomial(
+        hasher_,
+        negate,
+        new Term(hasher_, getImmediateByType(v->dtype(), 1), lhs_new));
   }
 
   // no scalar...
   if (!lhsTerm && !lhsPoly) {
-    lhsTerm = alloc<Term>(hasher_, immLike(v, 1), lhs_new);
+    lhsTerm = new Term(hasher_, getImmediateByType(v->dtype(), 1), lhs_new);
   }
 
   bool createdRHSnegated = false;
   if (!rhsTerm && !rhsPoly) {
-    rhsTerm = alloc<Term>(hasher_, immLike(v, -1), rhs_new);
+    rhsTerm = new Term(hasher_, getImmediateByType(v->dtype(), -1), rhs_new);
     createdRHSnegated = true;
   }
 
@@ -703,43 +605,44 @@ ExprPtr PolynomialTransformer::mutate(SubPtr v) {
   // Insert wrapper Term into negated RHS Poly.
   if (rhsPoly) {
     CHECK(lhsTerm);
-    ExprPtr minusOne = immLike(rhsPoly, -1);
-    ExprPtr newScalar = evaluateOp(alloc<Mul>(minusOne, rhsPoly->scalar()));
+    Expr* minusOne = getImmediateByType(rhsPoly->dtype(), -1);
+    Expr* newScalar = evaluateOp(new Mul(minusOne, rhsPoly->scalar()));
 
     // Negate each term in the Polynomial RHS.
-    std::vector<TermPtr> variables;
-    for (auto t : rhsPoly->variables()) {
-      ExprPtr negate = evaluateOp(alloc<Mul>(minusOne, t->scalar()));
-      variables.push_back(alloc<Term>(hasher_, negate, t->variables()));
+    std::vector<Term*> variables;
+    for (auto* t : rhsPoly->variables()) {
+      Expr* negate = evaluateOp(new Mul(minusOne, t->scalar()));
+      variables.push_back(new Term(hasher_, negate, t->variables()));
     }
 
-    auto poly = alloc<Polynomial>(hasher_, newScalar, variables);
+    auto* poly = new Polynomial(hasher_, newScalar, variables);
     return insertTerm(poly, lhsTerm);
   }
 
-  return alloc<Polynomial>(hasher_, immLike(v, 0), lhsTerm, rhsTerm);
+  return new Polynomial(
+      hasher_, getImmediateByType(v->dtype(), 0), lhsTerm, rhsTerm);
 }
 
 // Multiply two terms together, usually creating a new term with the variable
 // lists concatenated.
-TermPtr PolynomialTransformer::mulTerms(TermPtr lhs, TermPtr rhs) {
-  ExprPtr scalar = evaluateOp(alloc<Mul>(lhs->scalar(), rhs->scalar()));
+Term* PolynomialTransformer::mulTerms(Term* lhs, Term* rhs) {
+  Expr* scalar = evaluateOp(new Mul(lhs->scalar(), rhs->scalar()));
   if (immediateEquals(scalar, 0)) {
     return nullptr;
   }
 
   // Can reorder here since floating point ops don't get put into Terms.
-  std::vector<ExprPtr> variables;
-  std::vector<ExprPtr> multilaneVariables;
+  std::vector<Expr*> variables;
+  std::vector<Expr*> multilaneVariables;
   // For now don't handle exponents.
-  for (auto c : lhs->variables()) {
+  for (auto* c : lhs->variables()) {
     if (isMultilanePrimitive(c)) {
       multilaneVariables.push_back(c);
     } else {
       variables.push_back(c);
     }
   }
-  for (auto c : rhs->variables()) {
+  for (auto* c : rhs->variables()) {
     if (isMultilanePrimitive(c)) {
       multilaneVariables.push_back(c);
     } else {
@@ -748,12 +651,12 @@ TermPtr PolynomialTransformer::mulTerms(TermPtr lhs, TermPtr rhs) {
   }
 
   // Merge all the multilane vars:
-  ExprPtr lastNode{nullptr};
-  for (auto node : multilaneVariables) {
+  Expr* lastNode{nullptr};
+  for (auto* node : multilaneVariables) {
     if (lastNode == nullptr) {
       lastNode = node;
     } else {
-      if (auto next = mulMultilane(lastNode, node)) {
+      if (auto* next = mulMultilane(lastNode, node)) {
         lastNode = next->accept_mutator(this);
       } else {
         variables.push_back(lastNode);
@@ -765,20 +668,20 @@ TermPtr PolynomialTransformer::mulTerms(TermPtr lhs, TermPtr rhs) {
     variables.push_back(lastNode);
   }
 
-  return alloc<Term>(hasher_, scalar, variables);
+  return new Term(hasher_, scalar, variables);
 }
 
 // Multiply a Polynomial by a Term.
-ExprPtr PolynomialTransformer::polyByTerm(PolynomialPtr poly, TermPtr term) {
+Expr* PolynomialTransformer::polyByTerm(Polynomial* poly, Term* term) {
   // poly * term
   //    = (poly_terms + poly_scalar) * term
   //    = poly_terms * term + poly_scalar * term
 
   // First, multiply all variables (terms) in the polynomial by the input
   // term.
-  std::vector<TermPtr> newTerms;
-  for (auto var : poly->variables()) {
-    TermPtr newTerm = mulTerms(var, term);
+  std::vector<Term*> newTerms;
+  for (auto* var : poly->variables()) {
+    Term* newTerm = mulTerms(var, term);
     if (newTerm) {
       newTerms.push_back(newTerm);
     }
@@ -789,37 +692,37 @@ ExprPtr PolynomialTransformer::polyByTerm(PolynomialPtr poly, TermPtr term) {
   // polynomial. If there are variables in term, this becomes a new term in
   // the result polynomial.
   if (!immediateEquals(poly->scalar(), 0)) {
-    ExprPtr scalar = evaluateOp(alloc<Mul>(poly->scalar(), term->scalar()));
+    Expr* scalar = evaluateOp(new Mul(poly->scalar(), term->scalar()));
     if (term->variables().empty()) {
-      return alloc<Polynomial>(hasher_, scalar, newTerms);
+      return new Polynomial(hasher_, scalar, newTerms);
     }
-    newTerms.push_back(alloc<Term>(hasher_, scalar, term->variables()));
+    newTerms.push_back(new Term(hasher_, scalar, term->variables()));
   }
 
   // The only case when the result polynomial has a scalar is when the input
   // term does not have any variables and the input polynomial has a non-zero
   // scalar. That case is handled above. So, at this point, we do not have any
   // scalars in the result polynomial.
-  return alloc<Polynomial>(hasher_, std::move(newTerms));
+  return new Polynomial(hasher_, std::move(newTerms));
 }
 
 // Does multiplying these two expressions make a Rounding Off operation.
 // e.g. LHS = (x/y),  RHS = y => (x / y) * y => RoundOff(x, y).
-ExprPtr PolynomialTransformer::isRoundOff(ExprPtr lhs, ExprPtr rhs) {
-  DivPtr div{nullptr};
-  ExprPtr other{nullptr};
+Expr* PolynomialTransformer::isRoundOff(Expr* lhs, Expr* rhs) {
+  Div* div{nullptr};
+  Expr* other{nullptr};
 
-  if ((div = to<Div>(lhs))) {
+  if ((div = dynamic_cast<Div*>(lhs))) {
     other = rhs;
-  } else if ((div = to<Div>(rhs))) {
+  } else if ((div = dynamic_cast<Div*>(rhs))) {
     other = lhs;
   } else {
     return nullptr;
   }
 
-  ExprPtr denom = div->rhs();
+  Expr* denom = div->rhs();
 
-  if (TermPtr denomTerm = to<Term>(denom)) {
+  if (Term* denomTerm = dynamic_cast<Term*>(denom)) {
     if (immediateEquals(denomTerm->scalar(), 1) &&
         denomTerm->variables().size() == 1) {
       denom = denomTerm->variables()[0];
@@ -828,7 +731,7 @@ ExprPtr PolynomialTransformer::isRoundOff(ExprPtr lhs, ExprPtr rhs) {
 
   if (hasher_.hash(denom) == hasher_.hash(other)) {
     // If the denominator is equal to the other, then yes it's a RoundOff.
-    return alloc<RoundOff>(div->lhs(), div->rhs());
+    return new RoundOff(div->lhs(), div->rhs());
   }
 
   if (denom->isConstant() && other->isConstant()) {
@@ -836,11 +739,10 @@ ExprPtr PolynomialTransformer::isRoundOff(ExprPtr lhs, ExprPtr rhs) {
       return nullptr;
     }
     // If they are both scalar we may be able to find a common factor.
-    if (immediateEquals(evaluateOp(alloc<Mod>(other, denom)), 0)) {
-      ExprPtr scalar = evaluateOp(alloc<Div>(other, denom));
-      ExprPtr newDenom = evaluateOp(alloc<Div>(other, scalar));
-      return alloc<Term>(
-          hasher_, scalar, alloc<RoundOff>(div->lhs(), newDenom));
+    if (immediateEquals(evaluateOp(new Mod(other, denom)), 0)) {
+      Expr* scalar = evaluateOp(new Div(other, denom));
+      Expr* newDenom = evaluateOp(new Div(other, scalar));
+      return new Term(hasher_, scalar, new RoundOff(div->lhs(), newDenom));
     }
   }
 
@@ -848,13 +750,13 @@ ExprPtr PolynomialTransformer::isRoundOff(ExprPtr lhs, ExprPtr rhs) {
 }
 
 // Inserts a new component into a term, looking for opportunities to simplify.
-ExprPtr PolynomialTransformer::insertIntoTerm(TermPtr term, ExprPtr expr) {
-  std::vector<ExprPtr> vars;
+Expr* PolynomialTransformer::insertIntoTerm(Term* term, Expr* expr) {
+  std::vector<Expr*> vars;
 
   // Search for RoundOffs.
   bool merged{false};
-  for (auto component : term->variables()) {
-    if (auto roundoff = isRoundOff(component, expr)) {
+  for (auto* component : term->variables()) {
+    if (auto* roundoff = isRoundOff(component, expr)) {
       vars.push_back(roundoff);
       merged = true;
     } else {
@@ -870,29 +772,29 @@ ExprPtr PolynomialTransformer::insertIntoTerm(TermPtr term, ExprPtr expr) {
     return vars[0];
   }
 
-  return alloc<Term>(hasher_, term->scalar(), vars);
+  return new Term(hasher_, term->scalar(), vars);
 }
 
-ExprPtr PolynomialTransformer::mutate(MulPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Mul* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    return evaluateOp(alloc<Mul>(lhs_new, rhs_new));
+    return evaluateOp(new Mul(lhs_new, rhs_new));
   }
 
   // Multilane folding.
   if (isMultilanePrimitive(lhs_new)) {
-    if (auto ret = mulMultilane(lhs_new, rhs_new)) {
+    if (auto* ret = mulMultilane(lhs_new, rhs_new)) {
       // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
       return ret->accept_mutator(this);
     }
   }
 
   // Order doesn't matter.
-  ExprPtr scalar = nullptr;
-  ExprPtr variable = nullptr;
+  Expr* scalar = nullptr;
+  Expr* variable = nullptr;
   if (lhs_new->isConstant()) {
     scalar = lhs_new;
     variable = rhs_new;
@@ -904,7 +806,7 @@ ExprPtr PolynomialTransformer::mutate(MulPtr v) {
   // Handle special case mul by 1 since thats safe for floating point, even if
   // it's Nan/Inf.
   if (scalar && immediateEquals(scalar, 1)) {
-    auto c = alloc<Cast>(v->dtype(), variable);
+    auto* c = new Cast(v->dtype(), variable);
     // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
     return c->accept_mutator(this);
   }
@@ -913,35 +815,35 @@ ExprPtr PolynomialTransformer::mutate(MulPtr v) {
   // dont want to combine ops.
   if (lhs_new->dtype().is_floating_point() ||
       rhs_new->dtype().is_floating_point()) {
-    return alloc<Mul>(lhs_new, rhs_new);
+    return new Mul(lhs_new, rhs_new);
   }
 
   // Handle special case mul by 0.
   if (scalar && immediateEquals(scalar, 0)) {
-    return immLike(v, 0);
+    return getImmediateByType(v->dtype(), 0);
   }
 
   // Catch cases of rounding (Div(A/B) * B).
-  if (auto ret = isRoundOff(lhs_new, rhs_new)) {
+  if (auto* ret = isRoundOff(lhs_new, rhs_new)) {
     return ret;
-  } else if (auto ret = isRoundOff(v->lhs(), v->rhs())) {
+  } else if (auto* ret = isRoundOff(v->lhs(), v->rhs())) {
     // We can break the Round + Mod pattern via factorization of the Div, so
     // check whether it would have worked on the unsimplified tree. If so, we
     // need to simplify again.
     return ret->accept_mutator(this);
   }
 
-  PolynomialPtr lhsPoly = to<Polynomial>(lhs_new);
-  PolynomialPtr rhsPoly = to<Polynomial>(rhs_new);
+  Polynomial* lhsPoly = dynamic_cast<Polynomial*>(lhs_new);
+  Polynomial* rhsPoly = dynamic_cast<Polynomial*>(rhs_new);
 
   if (lhsPoly && rhsPoly) {
     // This expands to more terms that we can't generally fix without variable
     // factorization, it's more efficient to just leave these as Muls.
-    return alloc<Mul>(lhsPoly, rhsPoly);
+    return new Mul(lhsPoly, rhsPoly);
   }
 
-  TermPtr lhsTerm = to<Term>(lhs_new);
-  TermPtr rhsTerm = to<Term>(rhs_new);
+  Term* lhsTerm = dynamic_cast<Term*>(lhs_new);
+  Term* rhsTerm = dynamic_cast<Term*>(rhs_new);
 
   if (lhsPoly && rhsTerm) {
     return polyByTerm(lhsPoly, rhsTerm);
@@ -956,37 +858,39 @@ ExprPtr PolynomialTransformer::mutate(MulPtr v) {
   }
 
   if (scalar && lhsTerm) {
-    ExprPtr newScalar = evaluateOp(alloc<Mul>(scalar, lhsTerm->scalar()));
-    return alloc<Term>(hasher_, newScalar, lhsTerm->variables());
+    Expr* newScalar = evaluateOp(new Mul(scalar, lhsTerm->scalar()));
+    return new Term(hasher_, newScalar, lhsTerm->variables());
   }
 
   if (scalar && rhsTerm) {
-    ExprPtr newScalar = evaluateOp(alloc<Mul>(scalar, rhsTerm->scalar()));
-    return alloc<Term>(hasher_, newScalar, rhsTerm->variables());
+    Expr* newScalar = evaluateOp(new Mul(scalar, rhsTerm->scalar()));
+    return new Term(hasher_, newScalar, rhsTerm->variables());
   }
 
   // If this is a scalar * a Polynomial, push the scalar term down.
   // We can wrap the scalar with a Term and use polyByTerm.
   if (scalar && lhsPoly) {
-    return polyByTerm(lhsPoly, alloc<Term>(hasher_, scalar));
+    return polyByTerm(lhsPoly, new Term(hasher_, scalar));
   }
   if (scalar && rhsPoly) {
-    return polyByTerm(rhsPoly, alloc<Term>(hasher_, scalar));
+    return polyByTerm(rhsPoly, new Term(hasher_, scalar));
   }
 
   // simple term with a scalar and variable type.
   if (scalar) {
-    return alloc<Term>(hasher_, scalar, variable);
+    return new Term(hasher_, scalar, variable);
   }
 
   // Multiplying Polynomial by variable can be wrapped in a term and handled
   // by polyByTerm also.
   if (lhsPoly) {
-    auto term = alloc<Term>(hasher_, immLike(rhs_new, 1), rhs_new);
+    auto* term =
+        new Term(hasher_, getImmediateByType(rhs_new->dtype(), 1), rhs_new);
     return polyByTerm(lhsPoly, term);
   }
   if (rhsPoly) {
-    auto term = alloc<Term>(hasher_, immLike(lhs_new, 1), lhs_new);
+    auto* term =
+        new Term(hasher_, getImmediateByType(lhs_new->dtype(), 1), lhs_new);
     return polyByTerm(rhsPoly, term);
   }
 
@@ -1000,19 +904,19 @@ ExprPtr PolynomialTransformer::mutate(MulPtr v) {
   }
 
   // Two variables, create a new Term.
-  return alloc<Term>(hasher_, immLike(v, 1), lhs_new, rhs_new);
+  return new Term(hasher_, getImmediateByType(v->dtype(), 1), lhs_new, rhs_new);
 }
 
-ExprPtr factorizeDivision(ExprPtr lhs_new, ExprPtr rhs_new) {
+Expr* factorizeDivision(Expr* lhs_new, Expr* rhs_new) {
   if (!lhs_new || !rhs_new) {
     return nullptr;
   }
 
-  ExprPtr leftScalar = lhs_new->isConstant() ? lhs_new : nullptr;
-  ExprPtr rightScalar = rhs_new->isConstant() ? rhs_new : nullptr;
+  Expr* leftScalar = lhs_new->isConstant() ? lhs_new : nullptr;
+  Expr* rightScalar = rhs_new->isConstant() ? rhs_new : nullptr;
 
-  auto lhsTerm = to<Term>(lhs_new);
-  auto rhsTerm = to<Term>(rhs_new);
+  auto* lhsTerm = dynamic_cast<Term*>(lhs_new);
+  auto* rhsTerm = dynamic_cast<Term*>(rhs_new);
   if (lhsTerm) {
     leftScalar = lhsTerm->scalar();
   }
@@ -1033,38 +937,40 @@ ExprPtr factorizeDivision(ExprPtr lhs_new, ExprPtr rhs_new) {
     return nullptr;
   }
 
-  leftScalar = evaluateOp(alloc<Div>(leftScalar, immLike(leftScalar, GCD)));
-  rightScalar = evaluateOp(alloc<Div>(rightScalar, immLike(rightScalar, GCD)));
+  leftScalar = evaluateOp(
+      new Div(leftScalar, getImmediateByType(leftScalar->dtype(), GCD)));
+  rightScalar = evaluateOp(
+      new Div(rightScalar, getImmediateByType(rightScalar->dtype(), GCD)));
 
   if (lhsTerm) {
-    lhs_new = alloc<Term>(lhsTerm->hasher(), leftScalar, lhsTerm->variables());
+    lhs_new = new Term(lhsTerm->hasher(), leftScalar, lhsTerm->variables());
   } else {
     lhs_new = leftScalar;
   }
 
   if (rhsTerm) {
-    rhs_new = alloc<Term>(rhsTerm->hasher(), rightScalar, rhsTerm->variables());
+    rhs_new = new Term(rhsTerm->hasher(), rightScalar, rhsTerm->variables());
   } else {
     rhs_new = rightScalar;
   }
 
-  return alloc<Div>(lhs_new, rhs_new);
+  return new Div(lhs_new, rhs_new);
 }
 
-ExprPtr PolynomialTransformer::mutate(DivPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Div* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    return evaluateOp(alloc<Div>(lhs_new, rhs_new));
+    return evaluateOp(new Div(lhs_new, rhs_new));
   }
 
   // If this is a floating point Div then order of operations is important, we
   // dont want to combine ops.
   if (lhs_new->dtype().is_floating_point() ||
       rhs_new->dtype().is_floating_point()) {
-    return alloc<Div>(lhs_new, rhs_new);
+    return new Div(lhs_new, rhs_new);
   }
 
   // If the numerator is zero, so is the result.
@@ -1089,16 +995,16 @@ ExprPtr PolynomialTransformer::mutate(DivPtr v) {
     return ret->accept_mutator(this);
   }
 
-  return alloc<Div>(lhs_new, rhs_new);
+  return new Div(lhs_new, rhs_new);
 }
 
-ExprPtr PolynomialTransformer::mutate(ModPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Mod* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    return evaluateOp(alloc<Mod>(lhs_new, rhs_new));
+    return evaluateOp(new Mod(lhs_new, rhs_new));
   }
 
   // 0 % x => 0.
@@ -1110,17 +1016,17 @@ ExprPtr PolynomialTransformer::mutate(ModPtr v) {
   // x % 1 == 0.
   if (rhs_new->isConstant() && immediateEquals(rhs_new, 1)) {
     // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
-    return immLike(v, 0);
+    return getImmediateByType(v->dtype(), 0);
   }
 
   // x % x => 0.
   if (hasher_.hash(lhs_new) == hasher_.hash(rhs_new)) {
-    return immLike(v, 0);
+    return getImmediateByType(v->dtype(), 0);
   }
 
-  TermPtr lhsTerm = to<Term>(lhs_new);
+  Term* lhsTerm = dynamic_cast<Term*>(lhs_new);
   if (!lhsTerm) {
-    PolynomialPtr lhsPoly = to<Polynomial>(lhs_new);
+    Polynomial* lhsPoly = dynamic_cast<Polynomial*>(lhs_new);
     if (lhsPoly) {
       // Can still optimize this out if we can factorize the polynomial.
       lhsTerm = factorizePolynomial(lhsPoly);
@@ -1130,15 +1036,14 @@ ExprPtr PolynomialTransformer::mutate(ModPtr v) {
   if (lhsTerm) {
     // ((C1 * C2) * x) % C1 => 0.
     if (rhs_new->isConstant() &&
-        immediateEquals(
-            evaluateOp(alloc<Mod>(lhsTerm->scalar(), rhs_new)), 0)) {
-      return immLike(v, 0);
+        immediateEquals(evaluateOp(new Mod(lhsTerm->scalar(), rhs_new)), 0)) {
+      return getImmediateByType(v->dtype(), 0);
     }
 
     // (x * y * z) % x => 0.
-    for (auto component : lhsTerm->variables()) {
+    for (auto* component : lhsTerm->variables()) {
       if (hasher_.hash(component) == hasher_.hash(rhs_new)) {
-        return immLike(v, 0);
+        return getImmediateByType(v->dtype(), 0);
       }
     }
 
@@ -1146,7 +1051,7 @@ ExprPtr PolynomialTransformer::mutate(ModPtr v) {
     // also, (x * y * z) % (z * y) => 0.
     // This requires all variable terms found in the RHS to be present in the
     // LHS.
-    TermPtr rhsTerm = to<Term>(rhs_new);
+    Term* rhsTerm = dynamic_cast<Term*>(rhs_new);
     if (rhsTerm) {
       auto& lVars = lhsTerm->variables();
       auto& rVars = rhsTerm->variables();
@@ -1170,14 +1075,13 @@ ExprPtr PolynomialTransformer::mutate(ModPtr v) {
 
       if (rLeft == 0 &&
           immediateEquals(
-              evaluateOp(alloc<Mod>(lhsTerm->scalar(), rhsTerm->scalar())),
-              0)) {
-        return immLike(v, 0);
+              evaluateOp(new Mod(lhsTerm->scalar(), rhsTerm->scalar())), 0)) {
+        return getImmediateByType(v->dtype(), 0);
       }
     }
   }
 
-  return alloc<Mod>(lhs_new, rhs_new);
+  return new Mod(lhs_new, rhs_new);
 }
 
 namespace {
@@ -1186,14 +1090,14 @@ namespace {
 // The first type on the template refers to the op, as in Min or Max and the
 // second type refers to the corresponding term, as in MinTerm or MaxTerm.
 template <class Op, class OpTerm>
-ExprPtr combineMinMaxTerms(
-    ExprPtr lhs,
-    ExprPtr rhs,
+Expr* combineMinMaxTerms(
+    Expr* lhs,
+    Expr* rhs,
     bool propagate_nans,
     HashProvider& hasher) {
-  auto combine_scalars = [&](ExprPtr c1, ExprPtr c2) -> ExprPtr {
+  auto combine_scalars = [&](Expr* c1, Expr* c2) -> Expr* {
     if (c1 && c2) {
-      return evaluateOp(alloc<Op>(c1, c2, propagate_nans));
+      return evaluateOp(new Op(c1, c2, propagate_nans));
     }
     if (c1) {
       return c1;
@@ -1201,21 +1105,21 @@ ExprPtr combineMinMaxTerms(
     return c2;
   };
 
-  auto combine_opterms = [&](NodePtr<OpTerm> m1, NodePtr<OpTerm> m2) {
-    ExprPtr scalar = combine_scalars(m1->scalar(), m2->scalar());
-    std::vector<ExprPtr> variables;
+  auto combine_opterms = [&](OpTerm* m1, OpTerm* m2) {
+    Expr* scalar = combine_scalars(m1->scalar(), m2->scalar());
+    std::vector<Expr*> variables;
     for (auto v : m1->variables()) {
       variables.push_back(v);
     }
     for (auto v : m2->variables()) {
       variables.push_back(v);
     }
-    return alloc<OpTerm>(hasher, scalar, propagate_nans, std::move(variables));
+    return new OpTerm(hasher, scalar, propagate_nans, std::move(variables));
   };
 
-  auto add_expr_to_opterm = [&](ExprPtr expr, NodePtr<OpTerm> opterm) {
-    ExprPtr scalar = nullptr;
-    std::vector<ExprPtr> variables;
+  auto add_expr_to_opterm = [&](Expr* expr, OpTerm* opterm) {
+    Expr* scalar = nullptr;
+    std::vector<Expr*> variables;
     if (opterm) {
       scalar = opterm->scalar();
       variables = opterm->variables();
@@ -1226,16 +1130,16 @@ ExprPtr combineMinMaxTerms(
     } else {
       variables.push_back(expr);
     }
-    return alloc<OpTerm>(hasher, scalar, propagate_nans, std::move(variables));
+    return new OpTerm(hasher, scalar, propagate_nans, std::move(variables));
   };
 
-  auto lhs_opterm = to<OpTerm>(lhs);
-  auto rhs_opterm = to<OpTerm>(rhs);
+  OpTerm* lhs_opterm = dynamic_cast<OpTerm*>(lhs);
+  OpTerm* rhs_opterm = dynamic_cast<OpTerm*>(rhs);
   if (lhs_opterm && lhs_opterm->propagate_nans() != propagate_nans) {
-    return alloc<Op>(lhs, rhs, propagate_nans);
+    return new Op(lhs, rhs, propagate_nans);
   }
   if (rhs_opterm && rhs_opterm->propagate_nans() != propagate_nans) {
-    return alloc<Op>(lhs, rhs, propagate_nans);
+    return new Op(lhs, rhs, propagate_nans);
   }
 
   if (lhs_opterm && rhs_opterm) {
@@ -1252,10 +1156,10 @@ ExprPtr combineMinMaxTerms(
 // the other op of opterm in other_op.
 template <class OpTerm>
 bool isOperandInMinMaxTerm(
-    NodePtr<OpTerm> opterm,
-    ExprPtr op,
+    OpTerm* opterm,
+    Expr* op,
     HashProvider& hasher,
-    ExprPtr* other_op) {
+    Expr** other_op) {
   if (opterm->variables().size() != 2) {
     return false;
   }
@@ -1285,13 +1189,13 @@ bool isOperandInMinMaxTerm(
 // type corresponding to the expected inner op (e.g. MinTerm).
 template <class OpTerm, class OtherOpTerm>
 bool simplifyNestedMinMax(
-    ExprPtr lhs,
-    ExprPtr rhs,
+    Expr* lhs,
+    Expr* rhs,
     bool propagate_nans,
     HashProvider& hasher,
-    ExprPtr* new_op) {
-  auto lhs_opterm = to<OtherOpTerm>(lhs);
-  auto rhs_opterm = to<OtherOpTerm>(rhs);
+    Expr** new_op) {
+  auto lhs_opterm = dynamic_cast<OtherOpTerm*>(lhs);
+  auto rhs_opterm = dynamic_cast<OtherOpTerm*>(rhs);
   if (lhs_opterm && rhs_opterm &&
       lhs_opterm->propagate_nans() == propagate_nans &&
       rhs_opterm->propagate_nans() == propagate_nans) {
@@ -1301,20 +1205,20 @@ bool simplifyNestedMinMax(
         auto rhs_v1 = rhs_opterm->variables()[0];
         auto rhs_v2 = rhs_opterm->variables()[1];
         // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-        ExprPtr new_op_lhs;
+        Expr* new_op_lhs;
         if (isOperandInMinMaxTerm<OtherOpTerm>(
                 lhs_opterm, rhs_v1, hasher, &new_op_lhs)) {
-          auto inner_op = alloc<OpTerm>(
-              hasher, nullptr, propagate_nans, new_op_lhs, rhs_v2);
-          *new_op = alloc<OtherOpTerm>(
+          auto inner_op =
+              new OpTerm(hasher, nullptr, propagate_nans, new_op_lhs, rhs_v2);
+          *new_op = new OtherOpTerm(
               hasher, nullptr, propagate_nans, rhs_v1, inner_op);
           return true;
         }
         if (isOperandInMinMaxTerm<OtherOpTerm>(
                 lhs_opterm, rhs_v2, hasher, &new_op_lhs)) {
-          auto inner_op = alloc<OpTerm>(
-              hasher, nullptr, propagate_nans, new_op_lhs, rhs_v1);
-          *new_op = alloc<OtherOpTerm>(
+          auto inner_op =
+              new OpTerm(hasher, nullptr, propagate_nans, new_op_lhs, rhs_v1);
+          *new_op = new OtherOpTerm(
               hasher, nullptr, propagate_nans, rhs_v2, inner_op);
           return true;
         }
@@ -1326,17 +1230,17 @@ bool simplifyNestedMinMax(
 
 } // namespace
 
-ExprPtr PolynomialTransformer::mutate(MaxPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Max* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    return evaluateOp(alloc<Max>(lhs_new, rhs_new, v->propagate_nans()));
+    return evaluateOp(new Max(lhs_new, rhs_new, v->propagate_nans()));
   }
 
   // If diff is constant, return the appropriate operand.
-  ExprPtr diff = alloc<Sub>(lhs_new, rhs_new);
+  Expr* diff = new Sub(lhs_new, rhs_new);
   diff = diff->accept_mutator(this);
   if (diff->isConstant()) {
     if (immediateAs<int>(diff) > 0) {
@@ -1347,7 +1251,7 @@ ExprPtr PolynomialTransformer::mutate(MaxPtr v) {
 
   // Max(Min(x, y), Min(x, z)) => Min(x, Max(y, z))
   // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  ExprPtr new_op;
+  Expr* new_op;
   if (simplifyNestedMinMax<MaxTerm, MinTerm>(
           lhs_new, rhs_new, v->propagate_nans(), hasher_, &new_op)) {
     return new_op;
@@ -1357,17 +1261,17 @@ ExprPtr PolynomialTransformer::mutate(MaxPtr v) {
       lhs_new, rhs_new, v->propagate_nans(), hasher_);
 }
 
-ExprPtr PolynomialTransformer::mutate(MinPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Min* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    return evaluateOp(alloc<Min>(lhs_new, rhs_new, v->propagate_nans()));
+    return evaluateOp(new Min(lhs_new, rhs_new, v->propagate_nans()));
   }
 
   // If diff is constant, return the appropriate operand.
-  ExprPtr diff = alloc<Sub>(lhs_new, rhs_new);
+  Expr* diff = new Sub(lhs_new, rhs_new);
   diff = diff->accept_mutator(this);
   if (diff->isConstant()) {
     if (immediateAs<int>(diff) < 0) {
@@ -1378,7 +1282,7 @@ ExprPtr PolynomialTransformer::mutate(MinPtr v) {
 
   // Min(Max(x, y), Max(x, z)) => Max(x, Min(y, z))
   // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  ExprPtr new_op;
+  Expr* new_op;
   if (simplifyNestedMinMax<MinTerm, MaxTerm>(
           lhs_new, rhs_new, v->propagate_nans(), hasher_, &new_op)) {
     return new_op;
@@ -1388,15 +1292,15 @@ ExprPtr PolynomialTransformer::mutate(MinPtr v) {
       lhs_new, rhs_new, v->propagate_nans(), hasher_);
 }
 
-ExprPtr PolynomialTransformer::mutate(CompareSelectPtr v) {
-  ExprPtr lhs_new = v->lhs()->accept_mutator(this);
-  ExprPtr rhs_new = v->rhs()->accept_mutator(this);
-  ExprPtr true_branch = v->ret_val1()->accept_mutator(this);
-  ExprPtr false_branch = v->ret_val2()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(CompareSelect* v) {
+  Expr* lhs_new = v->lhs()->accept_mutator(this);
+  Expr* rhs_new = v->rhs()->accept_mutator(this);
+  Expr* true_branch = v->ret_val1()->accept_mutator(this);
+  Expr* false_branch = v->ret_val2()->accept_mutator(this);
 
   // Constant Folding.
   if (lhs_new->isConstant() && rhs_new->isConstant()) {
-    ExprPtr v_new = alloc<CompareSelect>(
+    Expr* v_new = new CompareSelect(
         lhs_new,
         rhs_new,
         true_branch,
@@ -1410,7 +1314,7 @@ ExprPtr PolynomialTransformer::mutate(CompareSelectPtr v) {
   // since we can't correctly handle NaN.
   if (lhs_new->dtype().is_floating_point() ||
       rhs_new->dtype().is_floating_point()) {
-    return alloc<CompareSelect>(
+    return new CompareSelect(
         lhs_new,
         rhs_new,
         true_branch,
@@ -1420,12 +1324,12 @@ ExprPtr PolynomialTransformer::mutate(CompareSelectPtr v) {
   }
 
   // If diff is constant, we can determine it.
-  ExprPtr diff = alloc<Sub>(rhs_new, lhs_new);
+  Expr* diff = new Sub(rhs_new, lhs_new);
   diff = diff->accept_mutator(this);
 
   // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
   if (!diff->isConstant()) {
-    return alloc<CompareSelect>(
+    return new CompareSelect(
         lhs_new,
         rhs_new,
         true_branch,
@@ -1454,7 +1358,7 @@ ExprPtr PolynomialTransformer::mutate(CompareSelectPtr v) {
   }
 
   // should not be possible but just in case.
-  return alloc<CompareSelect>(
+  return new CompareSelect(
       lhs_new,
       rhs_new,
       true_branch,
@@ -1463,21 +1367,21 @@ ExprPtr PolynomialTransformer::mutate(CompareSelectPtr v) {
       v->bias());
 }
 
-ExprPtr PolynomialTransformer::mutate(IntrinsicsPtr v) {
-  std::vector<ExprPtr> new_params;
+Expr* PolynomialTransformer::mutate(Intrinsics* v) {
+  std::vector<Expr*> new_params;
   bool changed = false;
   bool allConstant = true;
-  for (auto p : v->params()) {
-    ExprPtr new_child = p->accept_mutator(this);
+  for (auto* p : v->params()) {
+    Expr* new_child = p->accept_mutator(this);
     new_params.push_back(new_child);
 
     changed |= p != new_child;
     allConstant &= new_child->isConstant();
   }
 
-  ExprPtr node = v;
+  Expr* node = v;
   if (changed) {
-    node = alloc<Intrinsics>(v->op_type(), new_params);
+    node = new Intrinsics(v->op_type(), new_params);
   }
 
   if (!allConstant || !v->isPure()) {
@@ -1485,44 +1389,44 @@ ExprPtr PolynomialTransformer::mutate(IntrinsicsPtr v) {
   }
 
   // we're evaluating, but the evaluator only supports float intrinsics.
-  std::vector<ExprPtr> const_params;
+  std::vector<Expr*> const_params;
   changed = false;
-  for (auto p : new_params) {
+  for (auto* p : new_params) {
     if (p->dtype().scalar_type() == ScalarType::Float) {
       const_params.push_back(p);
     } else {
       const_params.push_back(
-          alloc<Cast>(Dtype(ScalarType::Float, p->dtype().lanes()), p));
+          new Cast(Dtype(ScalarType::Float, p->dtype().lanes()), p));
       changed = true;
     }
   }
 
   if (changed) {
-    node = alloc<Intrinsics>(v->op_type(), const_params);
+    node = new Intrinsics(v->op_type(), const_params);
   }
   return evaluateOp(node);
 }
 
-ExprPtr PolynomialTransformer::mutate(CastPtr v) {
-  ExprPtr node = v->src_value()->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(Cast* v) {
+  Expr* node = v->src_value()->accept_mutator(this);
   if (node->isConstant()) {
-    return evaluateOp(alloc<Cast>(v->dtype(), node));
+    return evaluateOp(new Cast(v->dtype(), node));
   }
 
   if (v->dtype() == node->dtype()) {
     return node;
   }
 
-  return alloc<Cast>(v->dtype(), node);
+  return new Cast(v->dtype(), node);
 }
 
-ExprPtr PolynomialTransformer::mutate(IfThenElsePtr v) {
-  ExprPtr condition = v->condition();
-  ExprPtr true_value = v->true_value();
-  ExprPtr false_value = v->false_value();
-  ExprPtr condition_new = condition->accept_mutator(this);
-  ExprPtr true_value_new = true_value->accept_mutator(this);
-  ExprPtr false_value_new = false_value->accept_mutator(this);
+Expr* PolynomialTransformer::mutate(IfThenElse* v) {
+  Expr* condition = v->condition();
+  Expr* true_value = v->true_value();
+  Expr* false_value = v->false_value();
+  Expr* condition_new = condition->accept_mutator(this);
+  Expr* true_value_new = true_value->accept_mutator(this);
+  Expr* false_value_new = false_value->accept_mutator(this);
 
   // If the condition is constant then we can choose the right branch now.
   if (condition_new->isConstant()) {
@@ -1543,33 +1447,17 @@ ExprPtr PolynomialTransformer::mutate(IfThenElsePtr v) {
     return v;
   }
 
-  return alloc<IfThenElse>(condition_new, true_value_new, false_value_new);
+  return new IfThenElse(condition_new, true_value_new, false_value_new);
 }
 
-ExprPtr PolynomialTransformer::mutate(AndPtr v) {
-  return mutateBinaryOp(v, this);
-}
+Stmt* PolynomialBase::mutate(Cond* v) {
+  Expr* cond_old = v->condition();
+  Stmt* true_old = v->true_stmt();
+  Stmt* false_old = v->false_stmt();
 
-ExprPtr PolynomialTransformer::mutate(XorPtr v) {
-  return mutateBinaryOp(v, this);
-}
-
-ExprPtr PolynomialTransformer::mutate(LshiftPtr v) {
-  return mutateBinaryOp(v, this);
-}
-
-ExprPtr PolynomialTransformer::mutate(RshiftPtr v) {
-  return mutateBinaryOp(v, this);
-}
-
-StmtPtr PolynomialBase::mutate(CondPtr v) {
-  ExprPtr cond_old = v->condition();
-  StmtPtr true_old = v->true_stmt();
-  StmtPtr false_old = v->false_stmt();
-
-  ExprPtr cond_new = cond_old->accept_mutator(this);
-  StmtPtr true_new = true_old ? true_old->accept_mutator(this) : true_old;
-  StmtPtr false_new = false_old ? false_old->accept_mutator(this) : false_old;
+  Expr* cond_new = cond_old->accept_mutator(this);
+  Stmt* true_new = true_old ? true_old->accept_mutator(this) : true_old;
+  Stmt* false_new = false_old ? false_old->accept_mutator(this) : false_old;
 
   // If the condition is constant then we can choose the right branch now.
   if (cond_new->isConstant()) {
@@ -1588,13 +1476,13 @@ StmtPtr PolynomialBase::mutate(CondPtr v) {
     return true_new;
   }
 
-  BlockPtr true_block = to<Block>(true_new);
-  BlockPtr false_block = to<Block>(false_new);
+  Block* true_block = dynamic_cast<Block*>(true_new);
+  Block* false_block = dynamic_cast<Block*>(false_new);
   bool true_empty = !true_new || (true_block && true_block->nstmts() == 0);
   bool false_empty = !false_new || (false_block && false_block->nstmts() == 0);
 
   if (true_empty && false_empty) {
-    return alloc<Block>(std::vector<StmtPtr>({}));
+    return new Block({});
   }
   if (cond_old != cond_new) {
     v->set_condition(cond_new);
@@ -1608,13 +1496,13 @@ StmtPtr PolynomialBase::mutate(CondPtr v) {
   return v;
 }
 
-StmtPtr handleForCondReordering(ForPtr loop, CondPtr cond) {
+Stmt* handleForCondReordering(For* loop, Cond* cond) {
   if (cond->false_stmt()) {
     return nullptr;
   }
 
   auto condition_vars = VarFinder::find(cond->condition());
-  for (auto v : condition_vars) {
+  for (auto* v : condition_vars) {
     // If the condition depends on a Var that is modified in the loop body, it
     // may not be safe to reorder.
     if (ModifiesVarChecker::check(loop, v)) {
@@ -1622,27 +1510,27 @@ StmtPtr handleForCondReordering(ForPtr loop, CondPtr cond) {
     }
   }
 
-  ForPtr new_f = loop->cloneWithNewBody(Stmt::clone(cond->true_stmt()));
+  For* new_f = loop->cloneWithNewBody(Stmt::clone(cond->true_stmt()));
   return cond->cloneWithNewBody(new_f);
 }
 
-StmtPtr PolynomialBase::mutate(ForPtr v) {
-  ExprPtr var = v->var();
-  ExprPtr start = v->start();
-  ExprPtr stop = v->stop();
-  StmtPtr body = v->body();
+Stmt* PolynomialBase::mutate(For* v) {
+  Expr* var = v->var();
+  Expr* start = v->start();
+  Expr* stop = v->stop();
+  Stmt* body = v->body();
   LoopOptions loop_options = v->loop_options();
-  ExprPtr var_new_expr = var->accept_mutator(this);
-  VarPtr var_new = to<Var>(var_new_expr);
-  ExprPtr start_new = start->accept_mutator(this);
-  ExprPtr stop_new = stop->accept_mutator(this);
-  StmtPtr body_new = body;
+  Expr* var_new_expr = var->accept_mutator(this);
+  Var* var_new = dynamic_cast<Var*>(var_new_expr);
+  Expr* start_new = start->accept_mutator(this);
+  Expr* stop_new = stop->accept_mutator(this);
+  Stmt* body_new = body;
 
-  ExprPtr loops = alloc<Sub>(stop_new, start_new);
+  Expr* loops = new Sub(stop_new, start_new);
   loops = loops->accept_mutator(this);
   if (loop_options.isDefault() && loops->isConstant()) {
     if (immediateEquals(loops, 0)) {
-      return alloc<Block>(std::vector<StmtPtr>({}));
+      return new Block({});
     } else if (immediateEquals(loops, 1)) {
       body_new = Substitute(body, {{var_new, start_new}});
       body_new = body_new->accept_mutator(this);
@@ -1652,17 +1540,17 @@ StmtPtr PolynomialBase::mutate(ForPtr v) {
 
   body_new = body_new->accept_mutator(this);
   if (!body_new) {
-    return alloc<Block>(std::vector<StmtPtr>({}));
+    return new Block({});
   }
 
-  if (auto block = to<Block>(body_new)) {
+  if (auto* block = dynamic_cast<Block*>(body_new)) {
     if (block->nstmts() == 0) {
-      return alloc<Block>(std::vector<StmtPtr>({}));
+      return new Block({});
     }
 
     if (block->nstmts() == 1) {
-      if (auto cond = to<Cond>(block->front())) {
-        StmtPtr reordered = handleForCondReordering(v, cond);
+      if (auto* cond = dynamic_cast<Cond*>(block->front())) {
+        Stmt* reordered = handleForCondReordering(v, cond);
         if (reordered) {
           return reordered->accept_mutator(this);
         }
@@ -1685,22 +1573,22 @@ StmtPtr PolynomialBase::mutate(ForPtr v) {
   return v;
 }
 
-StmtPtr PolynomialBase::mutate(BlockPtr v) {
-  std::vector<StmtPtr> stmts;
+Stmt* PolynomialBase::mutate(Block* v) {
+  std::vector<Stmt*> stmts;
   // Flatten sub-blocks:
   bool stmts_changed = false;
-  for (StmtPtr stmt : *v) {
-    StmtPtr stmt_new = stmt->accept_mutator(this);
+  for (Stmt* stmt : *v) {
+    Stmt* stmt_new = stmt->accept_mutator(this);
     stmts_changed |= stmt != stmt_new;
     if (stmt_new == nullptr) {
       continue;
     }
 
-    if (auto subBlock = to<Block>(stmt_new)) {
+    if (auto* subBlock = dynamic_cast<Block*>(stmt_new)) {
       for (Block::iterator I = subBlock->begin(), E = subBlock->end();
            I != E;) {
         // Be careful to avoid invalidating the iterator.
-        StmtPtr s = *(I++);
+        Stmt* s = *(I++);
         subBlock->remove_stmt(s);
         stmts.push_back(s);
       }
@@ -1717,20 +1605,20 @@ StmtPtr PolynomialBase::mutate(BlockPtr v) {
 
 // TermExpander
 
-ExprPtr TermExpander::mutate(TermPtr v) {
-  ExprPtr newScalar = v->scalar()->accept_mutator(this);
+Expr* TermExpander::mutate(Term* v) {
+  Expr* newScalar = v->scalar()->accept_mutator(this);
   if (immediateEquals(newScalar, 0)) {
     return newScalar;
   }
 
-  std::vector<ExprPtr> vars;
-  std::vector<ExprPtr> multilaneVars;
+  std::vector<Expr*> vars;
+  std::vector<Expr*> multilaneVars;
 
   // Assume we can reorder here because we wont merge floating terms.
-  ExprPtr lastNode{nullptr};
-  for (auto var : v->variables()) {
-    ExprPtr node = var->accept_mutator(this);
-    if (MulPtr mul = to<Mul>(node)) {
+  Expr* lastNode{nullptr};
+  for (auto* var : v->variables()) {
+    Expr* node = var->accept_mutator(this);
+    if (Mul* mul = dynamic_cast<Mul*>(node)) {
       // If the sub-Expr resolved to a multiplication, lift it into this
       // term.
       if (isMultilanePrimitive(mul->lhs())) {
@@ -1753,7 +1641,7 @@ ExprPtr TermExpander::mutate(TermPtr v) {
     }
   }
 
-  for (auto node : multilaneVars) {
+  for (auto* node : multilaneVars) {
     if (lastNode == nullptr) {
       lastNode = node;
     } else {
@@ -1764,11 +1652,11 @@ ExprPtr TermExpander::mutate(TermPtr v) {
     }
   }
 
-  for (auto node : vars) {
+  for (auto* node : vars) {
     if (lastNode == nullptr) {
       lastNode = node;
     } else {
-      lastNode = alloc<Mul>(lastNode, node);
+      lastNode = new Mul(lastNode, node);
     }
   }
 
@@ -1779,22 +1667,22 @@ ExprPtr TermExpander::mutate(TermPtr v) {
       auto termDtype = v->scalar()->dtype();
       auto lastNodeDtype = lastNode->dtype();
       if (termDtype != lastNodeDtype) {
-        ExprPtr castV = v->scalar();
+        Expr* castV = v->scalar();
         // Take care of lane mismatch first.
         if (termDtype.lanes() != lastNodeDtype.lanes()) {
-          castV = alloc<Broadcast>(v->scalar(), lastNodeDtype.lanes());
+          castV = new Broadcast(v->scalar(), lastNodeDtype.lanes());
         }
         // Now take care of scalar type as well.
         if (termDtype.scalar_type() != lastNodeDtype.scalar_type()) {
-          castV = alloc<Cast>(lastNode->dtype(), castV);
+          castV = new Cast(lastNode->dtype(), castV);
           // For scalars, we can simplify the cast further.
           if (lastNodeDtype.lanes() == 1) {
             castV = evaluateOp(castV);
           }
         }
-        lastNode = alloc<Mul>(castV, lastNode);
+        lastNode = new Mul(castV, lastNode);
       } else {
-        lastNode = alloc<Mul>(v->scalar(), lastNode);
+        lastNode = new Mul(v->scalar(), lastNode);
       }
     } else {
       lastNode = v->scalar();
@@ -1807,15 +1695,15 @@ ExprPtr TermExpander::mutate(TermPtr v) {
 // Returns an immediate containing the greatest common divisor of all terms
 // (inc. the scalar term) in the polynomial. If the GCD is uninteresting
 // (e.g. 1) then returns nullptr.
-ExprPtr polyGCD(PolynomialPtr poly) {
-  ExprPtr scalar = poly->scalar();
-  const std::vector<TermPtr>& variables = poly->variables();
+Expr* polyGCD(Polynomial* poly) {
+  Expr* scalar = poly->scalar();
+  const std::vector<Term*>& variables = poly->variables();
 
   // We ony want to factorize if we're saving complete operations, i.e. no
   // value in factorizing 6x + 4y into 2 * (3x + 2y) since we don't save work.
   int opsSaved = 1; // default to saving the scalar.
   long GCD = std::abs(immediateAs<long>(scalar));
-  for (auto t : variables) {
+  for (auto* t : variables) {
     long termScalar = std::abs(immediateAs<long>(t->scalar()));
     long newGCD = gcd(std::max(GCD, termScalar), std::min(GCD, termScalar));
     if (newGCD == 1) {
@@ -1845,7 +1733,7 @@ ExprPtr polyGCD(PolynomialPtr poly) {
     return nullptr;
   }
 
-  return immLike(poly, GCD);
+  return getImmediateByType(poly->dtype(), GCD);
 }
 
 // A ModRound is a div-mod-mul in which the divisor in div and multiplier in mul
@@ -1854,34 +1742,34 @@ ExprPtr polyGCD(PolynomialPtr poly) {
 // denotes x, 'divisor' denotes y and 'mod_divisor' denotes z.
 class ModRound {
  public:
-  ModRound(ExprPtr scalar, ExprPtr denom, ExprPtr divisor, ExprPtr mod_divisor)
+  ModRound(Expr* scalar, Expr* denom, Expr* divisor, Expr* mod_divisor)
       : scalar(scalar),
         denom(denom),
         divisor(divisor),
         mod_divisor(mod_divisor) {}
-  ExprPtr scalar;
-  ExprPtr denom;
-  ExprPtr divisor;
-  ExprPtr mod_divisor;
+  Expr* scalar;
+  Expr* denom;
+  Expr* divisor;
+  Expr* mod_divisor;
 };
 
-c10::optional<class ModRound*> isModRound(TermPtr e) {
-  DivPtr div{nullptr};
-  ModPtr mod{nullptr};
-  ExprPtr denom{nullptr};
-  ExprPtr divisor{nullptr};
-  ExprPtr mod_divisor{nullptr};
-  ExprPtr multiplier = e->scalar();
-  ExprPtr scalar{nullptr};
-  ExprPtr other{nullptr};
+c10::optional<class ModRound*> isModRound(Term* e) {
+  Div* div{nullptr};
+  Mod* mod{nullptr};
+  Expr* denom{nullptr};
+  Expr* divisor{nullptr};
+  Expr* mod_divisor{nullptr};
+  Expr* multiplier = e->scalar();
+  Expr* scalar{nullptr};
+  Expr* other{nullptr};
 
-  for (auto m : e->variables()) {
+  for (auto* m : e->variables()) {
     if (m->expr_type() == IRNodeType::kMod) {
       // TODO: currently only identify terms with one variable being mod; it is
       // possible to extend this if we have to handle terms like (t/(x%2 * y) %
       // z) * (x%2 *y).
       if (!mod) {
-        mod = to<Mod>(m);
+        mod = dynamic_cast<Mod*>(m);
       } else {
         return c10::nullopt;
       }
@@ -1890,11 +1778,11 @@ c10::optional<class ModRound*> isModRound(TermPtr e) {
       if (multiplier->isConstant()) {
         // Take care of lane mismatch first.
         if (multiplier->dtype().lanes() != m->dtype().lanes()) {
-          multiplier = alloc<Broadcast>(multiplier, m->dtype().lanes());
+          multiplier = new Broadcast(multiplier, m->dtype().lanes());
         }
         // Take care of scalar type mismatch.
         if (multiplier->dtype().scalar_type() != m->dtype().scalar_type()) {
-          multiplier = alloc<Cast>(m->dtype(), multiplier);
+          multiplier = new Cast(m->dtype(), multiplier);
           if (m->dtype().lanes() == 1) {
             multiplier = evaluateOp(multiplier);
           }
@@ -1902,7 +1790,7 @@ c10::optional<class ModRound*> isModRound(TermPtr e) {
       }
 
       // All non-mod vairables are considered as part of the multiplier.
-      multiplier = alloc<Mul>(multiplier, m);
+      multiplier = new Mul(multiplier, m);
     }
   }
   multiplier = IRSimplifier::simplify(multiplier);
@@ -1915,7 +1803,7 @@ c10::optional<class ModRound*> isModRound(TermPtr e) {
   mod_divisor = IRSimplifier::simplify(mod->rhs());
   other = mod->lhs();
 
-  if (!(div = to<Div>(other))) {
+  if (!(div = dynamic_cast<Div*>(other))) {
     return c10::nullopt;
   }
 
@@ -1937,19 +1825,18 @@ c10::optional<class ModRound*> isModRound(TermPtr e) {
     // transformations.
     if (divisor->isConstant() && multiplier->isConstant()) {
       // If both are scalar we may be able to find a common factor.
-      if (immediateEquals(evaluateOp(alloc<Mod>(multiplier, divisor)), 0)) {
+      if (immediateEquals(evaluateOp(new Mod(multiplier, divisor)), 0)) {
         // The common factor becomes 'scalar' of the term, e.g.,in t/3%7*6,
         // divisor=multiplier=3, scalar=2.
-        ExprPtr c = evaluateOp(alloc<Div>(multiplier, divisor));
+        Expr* c = evaluateOp(new Div(multiplier, divisor));
         scalar = c;
-      } else if (immediateEquals(
-                     evaluateOp(alloc<Mod>(divisor, multiplier)), 0)) {
+      } else if (immediateEquals(evaluateOp(new Mod(divisor, multiplier)), 0)) {
         // The common factor becomes part of 'denom', e.g., in t/14%7*2,
         // divisor=multiplier=2, denom=t/7.
-        ExprPtr c = evaluateOp(alloc<Div>(divisor, multiplier));
+        Expr* c = evaluateOp(new Div(divisor, multiplier));
         divisor = multiplier;
         // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
-        denom = IRSimplifier::simplify(alloc<Div>(other, c));
+        denom = IRSimplifier::simplify(new Div(other, c));
       } else {
         return c10::nullopt;
       }
@@ -1964,10 +1851,9 @@ c10::optional<class ModRound*> isModRound(TermPtr e) {
   }
 
   if (!scalar) {
-    scalar = immLike(multiplier, 1);
+    scalar = getImmediateByType(multiplier->dtype(), 1);
   }
 
-  // TODO: this leaks memory!
   return new ModRound(scalar, denom, divisor, mod_divisor);
 }
 
@@ -1975,14 +1861,14 @@ c10::optional<class ModRound*> isModRound(TermPtr e) {
 // (1) Round + Mod pattern: (x/y) * y + x % y => RoundOff(x,y) + Mod(x, y) => x
 // (2) Mod round + Mod pattern: (x/y % z)*y + x%y => ModRound(x, y, z) + Mod(x,
 // y) => x % (y*z)
-ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
-  std::vector<TermPtr> rounds;
-  std::vector<TermPtr> mods;
-  std::vector<TermPtr> mod_rounds;
-  std::vector<TermPtr> others;
+Expr* simplifyRoundModPattern(Polynomial* poly) {
+  std::vector<Term*> rounds;
+  std::vector<Term*> mods;
+  std::vector<Term*> mod_rounds;
+  std::vector<Term*> others;
 
   // Split out the Mod, ModRounds and RoundOffs operations so we can inspect.
-  for (auto c : poly->variables()) {
+  for (auto* c : poly->variables()) {
     if (c->variables().size() > 1) {
       if (auto a = isModRound(c)) {
         mod_rounds.push_back(c);
@@ -1992,9 +1878,9 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
       continue;
     }
 
-    ExprPtr e = c->variables()[0];
+    Expr* e = c->variables()[0];
 
-    if (to<RoundOff>(e)) {
+    if (dynamic_cast<RoundOff*>(e)) {
       rounds.push_back(c);
       // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage)
     } else if (e->expr_type() == IRNodeType::kMod) {
@@ -2015,7 +1901,7 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
 
   HashProvider& hasher = poly->hasher();
   bool didAnything = false;
-  std::vector<TermPtr> mods_merged;
+  std::vector<Term*> mods_merged;
   bool repeat = true;
   // Repeat merging terms till there are no Mods or the terms cannot be merged
   // any further.
@@ -2023,15 +1909,15 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
     repeat = false;
     // NOLINTNEXTLINE(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
     for (int64_t i = mods.size() - 1; i >= 0; i--) {
-      TermPtr m = mods[i];
-      ModPtr mod = to<Mod>(m->variables()[0]);
+      Term* m = mods[i];
+      Mod* mod = dynamic_cast<Mod*>(m->variables()[0]);
       CHECK(mod);
-      ExprPtr mod_lhs = IRSimplifier::simplify(mod->lhs());
-      ExprPtr mod_rhs = IRSimplifier::simplify(mod->rhs());
+      Expr* mod_lhs = IRSimplifier::simplify(mod->lhs());
+      Expr* mod_rhs = IRSimplifier::simplify(mod->rhs());
       bool merged = false;
       // NOLINTNEXTLINE(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
       for (int64_t j = mod_rounds.size() - 1; j >= 0; j--) {
-        TermPtr mr = mod_rounds[j];
+        Term* mr = mod_rounds[j];
         auto a = isModRound(mr);
         CHECK(a);
         ModRound* mod_round = dynamic_cast<ModRound*>(*a);
@@ -2040,7 +1926,7 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
         // optimization. E.g. it's possible to do: 2 * (x/y%z) * y + (x%y) =>
         // x%(y*z) + (x/y%z) * y
         if (!immediateEquals(
-                evaluateOp(alloc<Sub>(mod_round->scalar, m->scalar())), 0)) {
+                evaluateOp(new Sub(mod_round->scalar, m->scalar())), 0)) {
           continue;
         }
         // Valid optimization if mod LHS matches denom and mod RHS matches
@@ -2048,12 +1934,12 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
         if (hasher.hash(mod_round->denom) == hasher.hash(mod_lhs) &&
             hasher.hash(mod_round->divisor) == hasher.hash(mod_rhs)) {
           // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
-          TermPtr merged_m = alloc<Term>(
+          Term* merged_m = new Term(
               hasher,
               mod_round->scalar,
-              IRSimplifier::simplify(alloc<Mod>(
+              IRSimplifier::simplify(new Mod(
                   mod_round->denom,
-                  alloc<Mul>(mod_round->divisor, mod_round->mod_divisor))));
+                  new Mul(mod_round->divisor, mod_round->mod_divisor))));
           mods_merged.push_back(merged_m);
           merged = true;
           repeat = true;
@@ -2070,8 +1956,8 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
 
       // NOLINTNEXTLINE(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
       for (int64_t k = rounds.size() - 1; k >= 0; k--) {
-        TermPtr r = rounds[k];
-        RoundOffPtr roundoff = to<RoundOff>(r->variables()[0]);
+        Term* r = rounds[k];
+        RoundOff* roundoff = dynamic_cast<RoundOff*>(r->variables()[0]);
         CHECK(roundoff);
 
         // TODO: for now don't attempt partial factorization of this
@@ -2079,15 +1965,15 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
         // (x/y) * y but unsure thats actually much better, particulary with
         // CSE.
         if (!immediateEquals(
-                evaluateOp(alloc<Sub>(r->scalar(), m->scalar())), 0)) {
+                evaluateOp(new Sub(r->scalar(), m->scalar())), 0)) {
           continue;
         }
-        ExprPtr round_lhs = IRSimplifier::simplify(roundoff->lhs());
-        ExprPtr round_rhs = IRSimplifier::simplify(roundoff->rhs());
+        Expr* round_lhs = IRSimplifier::simplify(roundoff->lhs());
+        Expr* round_rhs = IRSimplifier::simplify(roundoff->rhs());
         // Valid optimization if LHS and RHS are equal for both.
         if (hasher.hash(round_lhs) == hasher.hash(mod_lhs) &&
             hasher.hash(round_rhs) == hasher.hash(mod_rhs)) {
-          TermPtr merged_r = alloc<Term>(hasher, r->scalar(), round_lhs);
+          Term* merged_r = new Term(hasher, r->scalar(), round_lhs);
           others.push_back(merged_r);
           merged = true;
           didAnything = true;
@@ -2127,16 +2013,16 @@ ExprPtr simplifyRoundModPattern(PolynomialPtr poly) {
     others.insert(others.end(), rounds.begin(), rounds.end());
   }
 
-  return alloc<Polynomial>(hasher, poly->scalar(), others);
+  return new Polynomial(hasher, poly->scalar(), others);
 }
 
 // Trivially factorize terms by GCD of scalar components.
-TermPtr PolynomialBase::factorizePolynomial(PolynomialPtr poly) {
-  ExprPtr scalar = poly->scalar();
-  const std::vector<TermPtr>& variables = poly->variables();
+Term* PolynomialBase::factorizePolynomial(Polynomial* poly) {
+  Expr* scalar = poly->scalar();
+  const std::vector<Term*>& variables = poly->variables();
 
   // Compute the GCD of terms.
-  ExprPtr GCD = polyGCD(poly);
+  Expr* GCD = polyGCD(poly);
 
   // No GCD means 0 or 1 and can't be factored.
   if (!GCD) {
@@ -2144,54 +2030,40 @@ TermPtr PolynomialBase::factorizePolynomial(PolynomialPtr poly) {
   }
 
   // Create new struture.
-  std::vector<TermPtr> newPolyTerms;
+  std::vector<Term*> newPolyTerms;
   newPolyTerms.reserve(variables.size());
-  for (auto t : variables) {
+  for (auto* t : variables) {
     // New term with the scalar divided by the GCD.
-    newPolyTerms.push_back(alloc<Term>(
-        poly->hasher(),
-        evaluateOp(alloc<Div>(t->scalar(), GCD)),
-        t->variables()));
+    newPolyTerms.push_back(new Term(
+        poly->hasher(), evaluateOp(new Div(t->scalar(), GCD)), t->variables()));
   }
 
-  PolynomialPtr newPoly = alloc<Polynomial>(
-      poly->hasher(), evaluateOp(alloc<Div>(scalar, GCD)), newPolyTerms);
+  Polynomial* newPoly = new Polynomial(
+      poly->hasher(), evaluateOp(new Div(scalar, GCD)), newPolyTerms);
 
-  return alloc<Term>(poly->hasher(), GCD, newPoly);
+  return new Term(poly->hasher(), GCD, newPoly);
 }
 
-ExprPtr TermExpander::mutate(PolynomialPtr v) {
+Expr* TermExpander::mutate(Polynomial* v) {
   if (v->variables().empty()) {
     return v->scalar();
   }
 
   // If this Polynomial can be factorized: do it, then expand the result.
-  if (ExprPtr simplified = simplifyRoundModPattern(v)) {
+  if (Expr* simplified = simplifyRoundModPattern(v)) {
     return simplified->accept_mutator(this);
   }
 
   // If this Polynomial can be factorized: do it, then expand the result.
-  if (ExprPtr factorized = factorizePolynomial(v)) {
+  if (Expr* factorized = factorizePolynomial(v)) {
     return factorized->accept_mutator(this);
   }
 
-  std::vector<TermPtr> addTerms;
-  std::vector<TermPtr> subTerms;
-
-  auto vars = v->variables();
-  std::unordered_map<ExprPtr, std::string> str_repr_cache;
-  std::sort(vars.begin(), vars.end(), [&](ExprPtr a, ExprPtr b) {
-    if (!str_repr_cache.count(a)) {
-      str_repr_cache[a] = std::to_string(a);
-    }
-    if (!str_repr_cache.count(b)) {
-      str_repr_cache[b] = std::to_string(b);
-    }
-    return str_repr_cache.at(a) < str_repr_cache.at(b);
-  });
+  std::vector<Term*> addTerms;
+  std::vector<Term*> subTerms;
 
   // partition the terms into a list to add and list to subtract.
-  for (auto node : vars) {
+  for (auto* node : v->variables()) {
     if (immediateIsNegative(node->scalar())) {
       subTerms.push_back(node);
     } else if (!immediateEquals(node->scalar(), 0)) {
@@ -2201,10 +2073,10 @@ ExprPtr TermExpander::mutate(PolynomialPtr v) {
   }
 
   // The last node constructed.
-  ExprPtr lastNode{nullptr};
+  Expr* lastNode{nullptr};
 
-  for (auto node : addTerms) {
-    ExprPtr simpleNode = node->accept_mutator(this);
+  for (auto* node : addTerms) {
+    Expr* simpleNode = node->accept_mutator(this);
 
     if (lastNode == nullptr) {
       lastNode = simpleNode;
@@ -2212,7 +2084,7 @@ ExprPtr TermExpander::mutate(PolynomialPtr v) {
     }
 
     if (isMultilanePrimitive(simpleNode)) {
-      auto ret = combineMultilane<Add>(lastNode, simpleNode);
+      auto* ret = combineMultilane<Add>(lastNode, simpleNode);
       if (ret) {
         // simplify result first, then expand.
         lastNode = ret->accept_mutator(simplifier_);
@@ -2221,14 +2093,14 @@ ExprPtr TermExpander::mutate(PolynomialPtr v) {
       }
     }
 
-    lastNode = alloc<Add>(lastNode, simpleNode);
+    lastNode = new Add(lastNode, simpleNode);
   }
 
   // If we have no add terms the scalar should go first.
   // E.g. 1 - x.
   bool scalarWritten = false;
   if (lastNode == nullptr) {
-    auto scalarNode = v->scalar()->accept_mutator(simplifier_);
+    auto* scalarNode = v->scalar()->accept_mutator(simplifier_);
 
     if (!immediateEquals(scalarNode, 0)) {
       lastNode = scalarNode;
@@ -2236,7 +2108,7 @@ ExprPtr TermExpander::mutate(PolynomialPtr v) {
     }
   }
 
-  for (auto node : subTerms) {
+  for (auto* node : subTerms) {
     // Can still be first node if scalarVal is 0.
     if (lastNode == nullptr) {
       lastNode = node->accept_mutator(this);
@@ -2244,39 +2116,39 @@ ExprPtr TermExpander::mutate(PolynomialPtr v) {
     }
 
     // Negate the term back to positive since we'll be subtracting it.
-    ExprPtr negated =
-        evaluateOp(alloc<Mul>(immLike(node->scalar(), -1), node->scalar()));
-    TermPtr newRHS = alloc<Term>(node->hasher(), negated, node->variables());
-    lastNode = alloc<Sub>(lastNode, newRHS->accept_mutator(this));
+    Expr* negated = evaluateOp(new Mul(
+        getImmediateByType(node->scalar()->dtype(), -1), node->scalar()));
+    Term* newRHS = new Term(node->hasher(), negated, node->variables());
+    lastNode = new Sub(lastNode, newRHS->accept_mutator(this));
   }
 
   if (scalarWritten || immediateEquals(v->scalar(), 0)) {
     if (!lastNode) {
-      return immLike(v, 0);
+      return getImmediateByType(v->dtype(), 0);
     }
     return lastNode;
   }
 
   if (immediateIsNegative(v->scalar())) {
     // Negate the scalar and subtract.
-    ExprPtr negated =
-        evaluateOp(alloc<Mul>(immLike(lastNode, -1), v->scalar()));
-    lastNode = alloc<Sub>(lastNode, evaluateOp(negated));
+    Expr* negated = evaluateOp(
+        new Mul(getImmediateByType(lastNode->dtype(), -1), v->scalar()));
+    lastNode = new Sub(lastNode, evaluateOp(negated));
   } else {
     // we want to avoid a cast to the scalar if it would happen.
     // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage)
     if (v->scalar()->dtype() != lastNode->dtype()) {
-      lastNode = alloc<Add>(
-          lastNode, evaluateOp(alloc<Cast>(lastNode->dtype(), v->scalar())));
+      lastNode = new Add(
+          lastNode, evaluateOp(new Cast(lastNode->dtype(), v->scalar())));
     } else {
-      lastNode = alloc<Add>(lastNode, v->scalar());
+      lastNode = new Add(lastNode, v->scalar());
     }
   }
 
   return lastNode;
 }
 
-ExprPtr TermExpander::mutate(MaxTermPtr v) {
+Expr* TermExpander::mutate(MaxTerm* v) {
   auto& variables = v->variables();
   if (variables.empty()) {
     if (!v->scalar()) {
@@ -2287,19 +2159,19 @@ ExprPtr TermExpander::mutate(MaxTermPtr v) {
     return v->scalar();
   }
   // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  ExprPtr max;
+  Expr* max;
   if (v->scalar()) {
-    max = alloc<Max>(variables[0], v->scalar(), v->propagate_nans());
+    max = new Max(variables[0], v->scalar(), v->propagate_nans());
   } else {
     max = variables[0];
   }
   for (size_t i = 1; i < variables.size(); i++) {
-    max = alloc<Max>(max, variables[i], v->propagate_nans());
+    max = new Max(max, variables[i], v->propagate_nans());
   }
   return max->accept_mutator(this);
 }
 
-ExprPtr TermExpander::mutate(MinTermPtr v) {
+Expr* TermExpander::mutate(MinTerm* v) {
   auto& variables = v->variables();
   if (variables.empty()) {
     if (!v->scalar()) {
@@ -2310,37 +2182,35 @@ ExprPtr TermExpander::mutate(MinTermPtr v) {
     return v->scalar();
   }
   // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  ExprPtr min;
+  Expr* min;
   if (v->scalar()) {
-    min = alloc<Min>(variables[0], v->scalar(), v->propagate_nans());
+    min = new Min(variables[0], v->scalar(), v->propagate_nans());
   } else {
     min = variables[0];
   }
   for (size_t i = 1; i < variables.size(); i++) {
-    min = alloc<Min>(min, variables[i], v->propagate_nans());
+    min = new Min(min, variables[i], v->propagate_nans());
   }
   return min->accept_mutator(this);
 }
 
 // Expands RoundOff(x, y) => Term(1, Div(x, y), y), which will later be expanded
 // to Mul(Div(x, y), y).
-ExprPtr TermExpander::mutate(RoundOffPtr v) {
-  TermPtr term = alloc<Term>(
+Expr* TermExpander::mutate(RoundOff* v) {
+  Term* term = new Term(
       simplifier_->hasher(),
-      immLike(v, 1),
-      alloc<Div>(v->lhs(), v->rhs()),
+      getImmediateByType(v->dtype(), 1),
+      new Div(v->lhs(), v->rhs()),
       v->rhs());
   return term->accept_mutator(this);
 }
 
-ExprPtr buf_flat_size(BufPtr v) {
-  std::vector<ExprPtr> dims = v->dims();
-  if (dims.size() == 0) {
-    return alloc<LongImm>(1);
-  }
-  ExprPtr flattened = immLike(dims[0], 1);
+Expr* buf_flat_size(Buf* v) {
+  std::vector<Expr*> dims = v->dims();
+
+  Expr* flattened = getImmediateByType(kInt, 1);
   for (auto& dim : dims) {
-    flattened = alloc<Mul>(flattened, dim);
+    flattened = new Mul(flattened, dim);
   }
   flattened = IRSimplifier::simplify(flattened);
 
@@ -2348,13 +2218,11 @@ ExprPtr buf_flat_size(BufPtr v) {
   return flattened;
 }
 
-StmtPtr TermExpander::mutate(AllocatePtr v) {
-  BufPtr buf = v->buf();
-  BufPtr buf_new = to<Buf>(v->buf()->accept_mutator(this));
-  TORCH_INTERNAL_ASSERT(
-      buf_new,
-      buildErrorMessage("TermExpander mutation produced null for Buf."));
-  ExprPtr flattened = buf_flat_size(buf_new);
+Stmt* TermExpander::mutate(Allocate* v) {
+  Buf* buf = v->buf();
+  Buf* buf_new = dynamic_cast<Buf*>(v->buf()->accept_mutator(this));
+  TORCH_INTERNAL_ASSERT(buf_new);
+  Expr* flattened = buf_flat_size(buf_new);
 
   if (flattened->isConstant() && immediateEquals(flattened, 0)) {
     eliminated_allocations_.insert(buf_new->base_handle());
@@ -2367,12 +2235,10 @@ StmtPtr TermExpander::mutate(AllocatePtr v) {
   return v;
 }
 
-StmtPtr TermExpander::mutate(FreePtr v) {
-  BufPtr buf = v->buf();
-  BufPtr buf_new = to<Buf>(v->buf()->accept_mutator(this));
-  TORCH_INTERNAL_ASSERT(
-      buf_new,
-      buildErrorMessage("TermExpander mutation produced null for Buf."));
+Stmt* TermExpander::mutate(Free* v) {
+  Buf* buf = v->buf();
+  Buf* buf_new = dynamic_cast<Buf*>(v->buf()->accept_mutator(this));
+  TORCH_INTERNAL_ASSERT(buf_new);
 
   if (eliminated_allocations_.count(buf_new->base_handle())) {
     eliminated_allocations_.erase(buf_new->base_handle());
@@ -2386,13 +2252,13 @@ StmtPtr TermExpander::mutate(FreePtr v) {
 }
 
 // Combines adjactent Cond nodes with identical conditions.
-BlockPtr TermExpander::fuseConditions(BlockPtr v) {
-  std::vector<StmtPtr> stmts;
+Block* TermExpander::fuseConditions(Block* v) {
+  std::vector<Stmt*> stmts;
   bool did_anything = false;
-  CondPtr prev_cond = nullptr;
+  Cond* prev_cond = nullptr;
 
-  for (auto s : *v) {
-    CondPtr cond = to<Cond>(s);
+  for (auto* s : *v) {
+    Cond* cond = dynamic_cast<Cond*>(s);
     if (!cond) {
       prev_cond = nullptr;
       stmts.push_back(s);
@@ -2411,8 +2277,8 @@ BlockPtr TermExpander::fuseConditions(BlockPtr v) {
 
     // Fuse the two Conds by appending the bodies of the second Cond to the
     // first.
-    BlockPtr true_block = alloc<Block>(std::vector<StmtPtr>({}));
-    BlockPtr false_block = alloc<Block>(std::vector<StmtPtr>({}));
+    Block* true_block = new Block({});
+    Block* false_block = new Block({});
 
     if (prev_cond->true_stmt()) {
       true_block->splice(true_block->end(), prev_cond->true_stmt());
@@ -2440,9 +2306,9 @@ BlockPtr TermExpander::fuseConditions(BlockPtr v) {
     }
 
     // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
-    StmtPtr new_cond = prev_cond->cloneWithNewBodies(true_block, false_block)
-                           ->accept_mutator(this);
-    prev_cond = to<Cond>(new_cond);
+    Stmt* new_cond = prev_cond->cloneWithNewBodies(true_block, false_block)
+                         ->accept_mutator(this);
+    prev_cond = dynamic_cast<Cond*>(new_cond);
 
     // erase, which shortens the list.
     stmts.pop_back();
@@ -2455,24 +2321,24 @@ BlockPtr TermExpander::fuseConditions(BlockPtr v) {
   }
 
   // clean up parents.
-  for (auto s : stmts) {
+  for (auto* s : stmts) {
     if (s->get_parent() == v) {
       v->remove_stmt(s);
     }
   }
 
-  return alloc<Block>(stmts);
+  return new Block(stmts);
 }
 
-StmtPtr TermExpander::fuseSyncThreads(BlockPtr block) {
+Stmt* TermExpander::fuseSyncThreads(Block* block) {
   // only really first if highest level Block.
   bool first = block->get_parent() == nullptr;
-  SyncThreadsPtr last = nullptr;
-  std::vector<StmtPtr> stmts;
+  SyncThreads* last = nullptr;
+  std::vector<Stmt*> stmts;
   bool did_anything = false;
 
-  for (auto s : *block) {
-    SyncThreadsPtr sync = to<SyncThreads>(s);
+  for (auto* s : *block) {
+    SyncThreads* sync = dynamic_cast<SyncThreads*>(s);
     if (!sync) {
       first = false;
       last = nullptr;
@@ -2500,18 +2366,18 @@ StmtPtr TermExpander::fuseSyncThreads(BlockPtr block) {
   }
 
   // clean up parents.
-  for (auto s : stmts) {
+  for (auto* s : stmts) {
     if (s->get_parent() == block) {
       block->remove_stmt(s);
     }
   }
 
-  return alloc<Block>(std::vector<StmtPtr>({stmts}));
+  return new Block({stmts});
 }
 
-StmtPtr TermExpander::mutate(BlockPtr v) {
-  StmtPtr new_stmt = PolynomialBase::mutate(v);
-  BlockPtr new_block = to<Block>(new_stmt);
+Stmt* TermExpander::mutate(Block* v) {
+  Stmt* new_stmt = PolynomialBase::mutate(v);
+  Block* new_block = dynamic_cast<Block*>(new_stmt);
   if (!new_block) {
     return new_stmt;
   }
@@ -2527,17 +2393,17 @@ StmtPtr TermExpander::mutate(BlockPtr v) {
 // This function records the bounds(range) info of the index var in a for-stmt.
 // The bounds info will be used later when simplifying expressions with the
 // index var.
-StmtPtr SimplifierUnderContext::mutate(ForPtr v) {
-  ExprPtr var = v->var();
-  ExprPtr start = v->start();
-  ExprPtr stop = v->stop();
-  StmtPtr body = v->body();
+Stmt* SimplifierUnderContext::mutate(For* v) {
+  Expr* var = v->var();
+  Expr* start = v->start();
+  Expr* stop = v->stop();
+  Stmt* body = v->body();
   LoopOptions loop_options = v->loop_options();
-  ExprPtr var_new_expr = var->accept_mutator(this);
-  VarPtr var_new = to<Var>(var_new_expr);
-  ExprPtr start_new = start->accept_mutator(this);
-  ExprPtr stop_new = stop->accept_mutator(this);
-  StmtPtr body_new = body;
+  Expr* var_new_expr = var->accept_mutator(this);
+  Var* var_new = dynamic_cast<Var*>(var_new_expr);
+  Expr* start_new = start->accept_mutator(this);
+  Expr* stop_new = stop->accept_mutator(this);
+  Stmt* body_new = body;
 
   // save bounds info before this for-stmt
   //
@@ -2555,23 +2421,22 @@ StmtPtr SimplifierUnderContext::mutate(ForPtr v) {
   // bound info after the for stmt, we can use it to simplify the assignment
   // stmt x = (i+20)/5 to x = 4.
   bool has_bounds = false;
-  std::pair<ExprPtr, ExprPtr> bound_old;
-  VarPtr var_key = to<Var>(var);
+  std::pair<Expr*, Expr*> bound_old;
+  Var* var_key = dynamic_cast<Var*>(var);
   auto got = var_bound_info_.find(var_key);
   if (got != var_bound_info_.end()) {
     has_bounds = true;
     bound_old = got->second;
   }
   // set bounds info for index var
-  const std::pair<ExprPtr, ExprPtr> bound_new =
-      std::make_pair(start_new, stop_new);
+  const std::pair<Expr*, Expr*> bound_new = std::make_pair(start_new, stop_new);
   var_bound_info_[var_key] = bound_new;
 
-  ExprPtr iters = alloc<Sub>(stop_new, start_new);
+  Expr* iters = new Sub(stop_new, start_new);
   iters = iters->accept_mutator(this);
   if (loop_options.isDefault() && iters->isConstant()) {
     if (immediateEquals(iters, 0)) {
-      return alloc<Block>(std::vector<StmtPtr>({}));
+      return new Block({});
     } else if (immediateEquals(iters, 1)) {
       body_new = Substitute(body, {{var_new, start_new}});
       body_new = body_new->accept_mutator(this);
@@ -2597,19 +2462,19 @@ StmtPtr SimplifierUnderContext::mutate(ForPtr v) {
   }
 
   if (!body_new) {
-    return alloc<Block>(std::vector<StmtPtr>({}));
+    return new Block({});
   }
 
-  if (auto block = to<Block>(body_new)) {
+  if (auto* block = dynamic_cast<Block*>(body_new)) {
     if (block->nstmts() == 0) {
-      return alloc<Block>(std::vector<StmtPtr>({}));
+      return new Block({});
     }
 
     if (block->nstmts() == 1) {
       // if the stmt in the loop body is a if-stmt, try to move the branching
       // out of the loop
-      if (auto cond = to<Cond>(block->front())) {
-        StmtPtr reordered = handleForCondReordering(v, cond);
+      if (auto* cond = dynamic_cast<Cond*>(block->front())) {
+        Stmt* reordered = handleForCondReordering(v, cond);
         if (reordered) {
           return reordered->accept_mutator(this);
         }
@@ -2658,7 +2523,7 @@ StmtPtr SimplifierUnderContext::mutate(ForPtr v) {
 //   returns -1. But currently, both Pytorch and NNC are performing an incorrect
 //   integer division: (-1)/6 = 0. With the current implementation of integer
 //   division, x has to be not negative. d) j is not negative
-ExprPtr distributeDiv(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
+Expr* distributeDiv(Expr* lhs, Expr* rhs, VarBoundInfo var_bound_info) {
   if (!lhs || !rhs) {
     return nullptr;
   }
@@ -2668,28 +2533,28 @@ ExprPtr distributeDiv(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
   }
 
   // identify n: a positive integer constant
-  ExprPtr rhsScalar = rhs->isConstant() ? rhs : nullptr;
+  Expr* rhsScalar = rhs->isConstant() ? rhs : nullptr;
   if (!rhsScalar) {
     return nullptr;
   }
-  ExprPtr check_n_value = IRSimplifier::simplify(
-      alloc<CompareSelect>(rhsScalar, immLike(rhsScalar, 0), kGT));
+  Expr* check_n_value =
+      IRSimplifier::simplify(new CompareSelect(rhsScalar, new IntImm(0), kGT));
   if (!immediateEquals(check_n_value, 1)) {
     return nullptr;
   }
 
-  auto lhsAdd = to<Add>(lhs);
+  auto* lhsAdd = dynamic_cast<Add*>(lhs);
   if (!lhsAdd) {
     return nullptr;
   }
-  ExprPtr lhsAdd1 = lhsAdd->lhs();
-  ExprPtr lhsAdd2 = lhsAdd->rhs();
+  Expr* lhsAdd1 = lhsAdd->lhs();
+  Expr* lhsAdd2 = lhsAdd->rhs();
 
   // identify index var 'i'
-  VarPtr var_key = to<Var>(lhsAdd1);
-  ExprPtr main = lhsAdd2;
+  Var* var_key = dynamic_cast<Var*>(lhsAdd1);
+  Expr* main = lhsAdd2;
   if (var_key == nullptr) {
-    var_key = to<Var>(lhsAdd2);
+    var_key = dynamic_cast<Var*>(lhsAdd2);
     main = lhsAdd1;
   }
 
@@ -2707,31 +2572,30 @@ ExprPtr distributeDiv(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
   // open upper bound, i.e.,  end is one more than the maximum value in the
   // range
   auto end = got->second.second;
-  ExprPtr check_start = IRSimplifier::simplify(
-      alloc<CompareSelect>(start, immLike(start, 0), kGE));
-  ExprPtr check_end =
-      IRSimplifier::simplify(alloc<CompareSelect>(end, rhsScalar, kLE));
+  Expr* check_start =
+      IRSimplifier::simplify(new CompareSelect(start, new IntImm(0), kGE));
+  Expr* check_end =
+      IRSimplifier::simplify(new CompareSelect(end, rhsScalar, kLE));
   if (!check_start->isConstant() || !check_end->isConstant() ||
       !immediateEquals(check_start, 1) || !immediateEquals(check_end, 1)) {
     return nullptr;
   }
 
-  ExprPtr ret = IRSimplifier::simplify(alloc<Div>(main, rhsScalar));
+  Expr* ret = IRSimplifier::simplify(new Div(main, rhsScalar));
 
   // simplify type 1) exprs: '(i+x)/n' => 'x/n'
-  ExprPtr sign_check =
-      IRSimplifier::simplify(alloc<CompareSelect>(main, immLike(main, 0), kGE));
-  ExprPtr main_mod = IRSimplifier::simplify(alloc<Mod>(main, rhsScalar));
-  ExprPtr mod_check = IRSimplifier::simplify(
-      alloc<CompareSelect>(alloc<Add>(main_mod, end), rhsScalar, kLE));
+  Expr* sign_check =
+      IRSimplifier::simplify(new CompareSelect(main, new IntImm(0), kGE));
+  Expr* main_mod = IRSimplifier::simplify(new Mod(main, rhsScalar));
+  Expr* mod_check = IRSimplifier::simplify(
+      new CompareSelect(new Add(main_mod, end), rhsScalar, kLE));
   if (sign_check->isConstant() && immediateEquals(sign_check, 1) &&
       mod_check->isConstant() && immediateEquals(mod_check, 1)) {
     return ret;
   }
 
   // simplify type 2 exprs: '(i+j*n)/n' => 'j'
-  auto ret_var = to<Var>(ret);
-  // FIXME: Allow any integral type.
+  auto ret_var = dynamic_cast<Var*>(ret);
   if (ret_var && ret_var->dtype() == kInt) {
     // retrieve j's range info
     auto got = var_bound_info.find(ret_var);
@@ -2740,8 +2604,8 @@ ExprPtr distributeDiv(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
     }
 
     // check if j is not negative
-    sign_check = IRSimplifier::simplify(alloc<CompareSelect>(
-        got->second.first, immLike(got->second.first, 0), kGE));
+    sign_check = IRSimplifier::simplify(
+        new CompareSelect(got->second.first, new IntImm(0), kGE));
     if (sign_check->isConstant() && immediateEquals(sign_check, 1)) {
       return ret_var;
     }
@@ -2776,7 +2640,7 @@ ExprPtr distributeDiv(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
 //   returns -1. But currently, both Pytorch and NNC are performing an incorrect
 //   integer division: (-1)/6 = 0. With the current implementation of integer
 //   division, j has to be not negative. d) j is not negative
-ExprPtr distributeMod(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
+Expr* distributeMod(Expr* lhs, Expr* rhs, VarBoundInfo var_bound_info) {
   if (!lhs || !rhs) {
     return nullptr;
   }
@@ -2786,31 +2650,31 @@ ExprPtr distributeMod(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
   }
 
   // identify n: a positive integer constant
-  ExprPtr rhsScalar = rhs->isConstant() ? rhs : nullptr;
+  Expr* rhsScalar = rhs->isConstant() ? rhs : nullptr;
   if (!rhsScalar) {
     return nullptr;
   }
-  ExprPtr check_n_value = IRSimplifier::simplify(
-      alloc<CompareSelect>(rhsScalar, immLike(rhsScalar, 0), kGT));
+  Expr* check_n_value =
+      IRSimplifier::simplify(new CompareSelect(rhsScalar, new IntImm(0), kGT));
   if (!immediateEquals(check_n_value, 1)) {
     return nullptr;
   }
 
-  auto lhsAdd = to<Add>(lhs);
+  auto* lhsAdd = dynamic_cast<Add*>(lhs);
   if (!lhsAdd) {
     return nullptr;
   }
   if (!lhsAdd || !rhsScalar) {
     return nullptr;
   }
-  ExprPtr lhsAdd1 = lhsAdd->lhs();
-  ExprPtr lhsAdd2 = lhsAdd->rhs();
+  Expr* lhsAdd1 = lhsAdd->lhs();
+  Expr* lhsAdd2 = lhsAdd->rhs();
 
   // identify index var 'i'
-  VarPtr var_key = to<Var>(lhsAdd1);
-  ExprPtr main = lhsAdd2;
+  Var* var_key = dynamic_cast<Var*>(lhsAdd1);
+  Expr* main = lhsAdd2;
   if (var_key == nullptr) {
-    var_key = to<Var>(lhsAdd2);
+    var_key = dynamic_cast<Var*>(lhsAdd2);
     main = lhsAdd1;
   }
   if (var_key == nullptr) {
@@ -2827,30 +2691,29 @@ ExprPtr distributeMod(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
   // open upper bound, i.e.,  end is one more than the maximum value in the
   // range
   auto end = got->second.second;
-  ExprPtr check_start = IRSimplifier::simplify(
-      alloc<CompareSelect>(start, immLike(start, 0), kGE));
-  ExprPtr check_end =
-      IRSimplifier::simplify(alloc<CompareSelect>(end, rhsScalar, kLE));
+  Expr* check_start =
+      IRSimplifier::simplify(new CompareSelect(start, new IntImm(0), kGE));
+  Expr* check_end =
+      IRSimplifier::simplify(new CompareSelect(end, rhsScalar, kLE));
   if (!check_start->isConstant() || !check_end->isConstant() ||
       !immediateEquals(check_start, 1) || !immediateEquals(check_end, 1)) {
     return nullptr;
   }
 
   // simplify type 1) exprs: '(i+x)%n' => 'i+x%n'
-  ExprPtr sign_check =
-      IRSimplifier::simplify(alloc<CompareSelect>(main, immLike(main, 0), kGE));
-  ExprPtr main_mod = IRSimplifier::simplify(alloc<Mod>(main, rhsScalar));
-  ExprPtr mod_check = IRSimplifier::simplify(
-      alloc<CompareSelect>(alloc<Add>(main_mod, end), rhsScalar, kLE));
+  Expr* sign_check =
+      IRSimplifier::simplify(new CompareSelect(main, new IntImm(0), kGE));
+  Expr* main_mod = IRSimplifier::simplify(new Mod(main, rhsScalar));
+  Expr* mod_check = IRSimplifier::simplify(
+      new CompareSelect(new Add(main_mod, end), rhsScalar, kLE));
   if (sign_check->isConstant() && immediateEquals(sign_check, 1) &&
       mod_check->isConstant() && immediateEquals(mod_check, 1)) {
-    return alloc<Add>(var_key, main_mod);
+    return new Add(var_key, main_mod);
   }
 
   // simplify type 2) exprs: '(i+j*n)%n' => 'i'
-  ExprPtr main_div = IRSimplifier::simplify(alloc<Div>(main, rhsScalar));
-  auto j_var = to<Var>(main_div);
-  // FIXME: Allow any integral type.
+  Expr* main_div = IRSimplifier::simplify(new Div(main, rhsScalar));
+  auto j_var = dynamic_cast<Var*>(main_div);
   if (j_var && j_var->dtype() == kInt) {
     // retrieve j's range info
     auto got = var_bound_info.find(j_var);
@@ -2859,8 +2722,8 @@ ExprPtr distributeMod(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
     }
 
     // check if j is not negative
-    sign_check = IRSimplifier::simplify(alloc<CompareSelect>(
-        got->second.first, immLike(got->second.first, 0), kGE));
+    sign_check = IRSimplifier::simplify(
+        new CompareSelect(got->second.first, new IntImm(0), kGE));
     if (sign_check->isConstant() && immediateEquals(sign_check, 1)) {
       return var_key;
     }
@@ -2869,91 +2732,72 @@ ExprPtr distributeMod(ExprPtr lhs, ExprPtr rhs, VarBoundInfo var_bound_info) {
   return nullptr;
 }
 
-ExprPtr SimplifierUnderContext::mutate(DivPtr v) {
-  ExprPtr lhs = v->lhs();
-  ExprPtr rhs = v->rhs();
+Expr* SimplifierUnderContext::mutate(Div* v) {
+  Expr* lhs = v->lhs();
+  Expr* rhs = v->rhs();
 
   std::ostringstream oss;
   if (auto ret = distributeDiv(lhs, rhs, var_bound_info_)) {
-    GRAPH_DEBUG("SimplifierUnderContext: ", *v, " => ", *ret);
     // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
+    oss << "SimplifierUnderContext: " << *v << " => " << *ret << "\n";
+    GRAPH_DEBUG(oss.str());
     return ret->accept_mutator(this);
   }
 
-  // i / N -> 0 if the range of i's values is a subset of [0, N)
-  // where N is an integer constant
-  auto lhsVar = to<Var>(lhs);
-  ExprPtr rhsScalar = rhs->isConstant() ? rhs : nullptr;
-  if (lhsVar && rhsScalar && !rhsScalar->dtype().is_floating_point()) {
-    auto got = var_bound_info_.find(lhsVar);
-    if (got != var_bound_info_.end()) {
-      auto start = got->second.first;
-      auto end = got->second.second;
-      ExprPtr check_start = IRSimplifier::simplify(
-          alloc<CompareSelect>(start, immLike(start, 0), kGE));
-      ExprPtr check_end =
-          IRSimplifier::simplify(alloc<CompareSelect>(end, rhsScalar, kLE));
-      if (check_start->isConstant() && check_end->isConstant() &&
-          immediateEquals(check_start, 1) && immediateEquals(check_end, 1)) {
-        GRAPH_DEBUG(
-            "SimplifierUnderContext: ", *v, " => ", *immLike(lhsVar, 0));
-        return immLike(lhsVar, 0);
-      }
-    }
-  }
-
-  ExprPtr lhs_new = lhs->accept_mutator(this);
-  ExprPtr rhs_new = rhs->accept_mutator(this);
+  Expr* lhs_new = lhs->accept_mutator(this);
+  Expr* rhs_new = rhs->accept_mutator(this);
   if (lhs == lhs_new && rhs == rhs_new) {
     return v;
   }
-  return alloc<Div>(lhs_new, rhs_new);
+  return new Div(lhs_new, rhs_new);
 }
 
-ExprPtr SimplifierUnderContext::mutate(ModPtr v) {
-  ExprPtr lhs = v->lhs();
-  ExprPtr rhs = v->rhs();
+Expr* SimplifierUnderContext::mutate(Mod* v) {
+  Expr* lhs = v->lhs();
+  Expr* rhs = v->rhs();
 
   std::ostringstream oss;
   if (auto ret = distributeMod(lhs, rhs, var_bound_info_)) {
-    GRAPH_DEBUG("SimplifierUnderContext: ", *v, " => ", *ret);
+    oss << "SimplifierUnderContext: " << *v << " => " << *ret << "\n";
+    GRAPH_DEBUG(oss.str());
     // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
     return ret->accept_mutator(this);
   }
 
   // i % N -> i if the range of i's values is a subset of [0, N)
   // where N is an integer constant
-  auto lhsVar = to<Var>(lhs);
-  ExprPtr rhsScalar = rhs->isConstant() ? rhs : nullptr;
+  auto* lhsVar = dynamic_cast<Var*>(lhs);
+  Expr* rhsScalar = rhs->isConstant() ? rhs : nullptr;
   if (lhsVar && rhsScalar && !rhsScalar->dtype().is_floating_point()) {
     auto got = var_bound_info_.find(lhsVar);
     if (got != var_bound_info_.end()) {
       auto start = got->second.first;
       auto end = got->second.second;
-      ExprPtr check_start = IRSimplifier::simplify(
-          alloc<CompareSelect>(start, immLike(start, 0), kGE));
-      ExprPtr check_end =
-          IRSimplifier::simplify(alloc<CompareSelect>(end, rhsScalar, kLE));
+      Expr* check_start =
+          IRSimplifier::simplify(new CompareSelect(start, new IntImm(0), kGE));
+      Expr* check_end =
+          IRSimplifier::simplify(new CompareSelect(end, rhsScalar, kLE));
       if (check_start->isConstant() && check_end->isConstant() &&
           immediateEquals(check_start, 1) && immediateEquals(check_end, 1)) {
-        GRAPH_DEBUG("SimplifierUnderContext: ", *v, " => ", *lhsVar);
+        oss << "SimplifierUnderContext: " << *v << " => " << *lhsVar << "\n";
+        GRAPH_DEBUG(oss.str());
         return lhsVar;
       }
     }
   }
 
-  ExprPtr lhs_new = lhs->accept_mutator(this);
-  ExprPtr rhs_new = rhs->accept_mutator(this);
+  Expr* lhs_new = lhs->accept_mutator(this);
+  Expr* rhs_new = rhs->accept_mutator(this);
   if (lhs == lhs_new && rhs == rhs_new) {
     return v;
   }
-  return alloc<Mod>(lhs_new, rhs_new);
+  return new Mod(lhs_new, rhs_new);
 }
 
-bool exprEquals(ExprPtr A, ExprPtr B) {
+bool exprEquals(Expr* A, Expr* B) {
   try {
     // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
-    ExprPtr diff = IRSimplifier::simplify(alloc<Sub>(A, B));
+    Expr* diff = IRSimplifier::simplify(new Sub(A, B));
     if (!diff->isConstant()) {
       return false;
     }
@@ -2961,49 +2805,6 @@ bool exprEquals(ExprPtr A, ExprPtr B) {
   } catch (std::exception& e) {
     return false;
   }
-}
-
-ExprPtr IRSimplifier::simplify(ExprPtr e) {
-  GRAPH_DEBUG("(Simplifier) Original: ", std::to_string(e));
-  SimplifierUnderContext ctxsimplifier;
-  e = e->accept_mutator(&ctxsimplifier);
-
-  PolynomialTransformer simplifier;
-  e = e->accept_mutator(&simplifier);
-
-  // There may be terms left in the IR, expand them.
-  TermExpander expander(&simplifier);
-  e = e->accept_mutator(&expander);
-  // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
-  if (!expander.check_safe()) {
-    throw malformed_input("eliminated null Allocation without free");
-  }
-
-  GRAPH_DEBUG("(Simplifier) Simplified: ", std::to_string(e));
-  return e;
-}
-
-StmtPtr IRSimplifier::simplify(StmtPtr s) {
-  GRAPH_DEBUG("(Simplifier) Original: ", std::to_string(s));
-  SimplifierUnderContext ctxsimplifier;
-  s = s->accept_mutator(&ctxsimplifier);
-
-  PolynomialTransformer simplifier;
-  s = s->accept_mutator(&simplifier);
-  if (s == nullptr) {
-    GRAPH_DEBUG("(Simplifier) Simplified: NULL");
-    return nullptr;
-  }
-
-  // There may be terms left in the IR, expand them.
-  TermExpander expander(&simplifier);
-  s = s->accept_mutator(&expander);
-  if (!expander.check_safe()) {
-    throw malformed_input("eliminated null Allocation without free");
-  }
-
-  GRAPH_DEBUG("(Simplifier) Simplified: ", std::to_string(s));
-  return s;
 }
 
 } // namespace tensorexpr

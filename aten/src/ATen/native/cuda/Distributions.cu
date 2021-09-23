@@ -16,8 +16,10 @@
 #include <ATen/native/Distributions.h>
 #include <ATen/native/cuda/Loops.cuh>
 #include <ATen/native/TensorIterator.h>
+#include <ATen/LegacyTHFunctionsCUDA.h>
 
 #include <THC/THCGeneral.h>
+#include <THC/THCApply.cuh>
 #include <THC/THCDeviceUtils.cuh>
 
 #include <cstdint>

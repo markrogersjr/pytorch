@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import enum
+import pickle
 from typing import Tuple
 
 import torch
@@ -466,7 +467,7 @@ class RemoteModuleTest(CommonRemoteModuleTest):
             dst_worker_name, modes=[ModuleCreationMode.MODULE_CTOR_WITH_INTERFACE]
         ):
             with TemporaryFileName() as fname:
-                with self.assertRaisesRegex(torch.jit.Error, "can only be pickled when using RPC"):
+                with self.assertRaises(pickle.PickleError):
                     torch.save(remote_module, fname)
 
 

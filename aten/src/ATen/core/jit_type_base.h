@@ -21,7 +21,7 @@ namespace c10 {
   _(DictType)               \
   _(NumberType)             \
   _(FloatType)              \
-  _(ComplexType)            \
+  _(ComplexType)      \
   _(FutureType)             \
   _(RRefType)               \
   _(IntType)                \
@@ -44,8 +44,7 @@ namespace c10 {
   _(ScalarTypeType)         \
   _(AnyListType)            \
   _(AnyTupleType)           \
-  _(AnyClassType)           \
-  _(UnionType)
+  _(AnyClassType)
 
 enum class TypeKind {
 #define DEFINE_TYPE(T) T,
@@ -204,7 +203,7 @@ struct TORCH_API Type : std::enable_shared_from_this<Type> {
   // contained_types
   TypePtr withContained(std::vector<TypePtr> contained_types) {
     auto current_contained = containedTypes();
-    TORCH_INTERNAL_ASSERT(current_contained.size() == contained_types.size());
+    AT_ASSERT(current_contained.size() == contained_types.size());
     if (current_contained.equals(contained_types)) {
       return shared_from_this();
     }

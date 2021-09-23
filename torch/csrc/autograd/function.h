@@ -181,12 +181,12 @@ struct TORCH_API Node : std::enable_shared_from_this<Node> {
   /// Adds the type and shape metadata for a new input. Returns the index of
   /// of the new input.
   uint32_t add_input_metadata(
-    const at::TensorOptions& options,
-    at::IntArrayRef shape,
-    bool is_tensor_subclass) noexcept {
+    const at::TensorOptions& options
+  , at::IntArrayRef shape
+  , at::Device device) noexcept {
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
     uint32_t input_nr = input_metadata_.size();
-    input_metadata_.emplace_back(options, shape, is_tensor_subclass);
+    input_metadata_.emplace_back(options, shape, device);
     return input_nr;
   }
 
@@ -559,14 +559,6 @@ struct MakeNextFunctionList : IterArgs<MakeNextFunctionList> {
     // NOLINTNEXTLINE(bugprone-branch-clone)
     if (variable.defined()) {
       next_edges.push_back(impl::gradient_edge(variable));
-    } else {
-      next_edges.emplace_back();
-    }
-  }
-  void operator()(const Variable* variable) {
-    // NOLINTNEXTLINE(bugprone-branch-clone)
-    if (variable->defined()) {
-      next_edges.push_back(impl::gradient_edge(*variable));
     } else {
       next_edges.emplace_back();
     }

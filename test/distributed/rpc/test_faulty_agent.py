@@ -15,6 +15,7 @@ from torch.testing._internal.distributed.rpc.faulty_rpc_agent_test_fixture impor
 )
 from torch.testing._internal.distributed.rpc_utils import (
     FAULTY_AGENT_TESTS,
+    MultiProcess,
     generate_tests,
 )
 
@@ -27,6 +28,7 @@ if not (IS_IN_CI and torch.cuda.is_available()):
             "Faulty",
             FaultyRpcAgentTestFixture,
             FAULTY_AGENT_TESTS,
+            MultiProcess.SPAWN,
             __name__,
         )
     )

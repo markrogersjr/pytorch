@@ -92,10 +92,9 @@ def trainbench(name, rnn_creator, nloops=100, warmup=10,
         bwd_end_event.record()
 
         if modeldef.backward is not None:
-            with torch.no_grad():
-                for param in modeldef.params:
-                    assert param.grad is not None
-                    param.grad.zero_()
+            for param in modeldef.params:
+                assert param.grad is not None
+                param.grad.data.zero_()
 
         if device == 'cuda':
             torch.cuda.synchronize()

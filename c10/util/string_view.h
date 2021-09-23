@@ -103,8 +103,7 @@ class basic_string_view final {
   }
 
   constexpr const_reference operator[](size_type pos) const {
-    // TODO: split out
-    return at_(pos);
+    return at(pos);
   }
 
   constexpr const_reference at(size_type pos) const {

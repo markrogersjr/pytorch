@@ -86,9 +86,4 @@ inline void set_history(
     set_history(variable, grad_fn);
   }
 }
-
-inline bool isFwGradDefined(const c10::optional<at::Tensor>& t) {
-  return t.has_value() && t->defined() && t->_fw_grad(/*level */ 0).defined();
-}
-
 }}

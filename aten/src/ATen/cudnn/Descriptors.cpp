@@ -2,7 +2,7 @@
 
 #include <ATen/ATen.h>
 
-#include <iostream>
+#include <ostream>
 #include <sstream>
 
 namespace at { namespace native {

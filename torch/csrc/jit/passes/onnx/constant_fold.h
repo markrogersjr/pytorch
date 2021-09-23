@@ -13,7 +13,6 @@ const int ONNX_OPSET_10 = 10;
 const int ONNX_OPSET_11 = 11;
 const int ONNX_OPSET_12 = 12;
 const int ONNX_OPSET_13 = 13;
-const int ONNX_OPSET_14 = 14;
 
 namespace onnx_constant_fold {
 

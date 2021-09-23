@@ -1,9 +1,6 @@
 from torch.fx.experimental.unification import Var  # type: ignore[attr-defined]
 
-from ._compatibility import compatibility
 
-
-@compatibility(is_backward_compatible=False)
 class TensorType:
     """
     TensorType defines a type for tensors, which consists of a list of dimensions.
@@ -51,7 +48,7 @@ class _DynType:
 
 Dyn = _DynType()
 
-@compatibility(is_backward_compatible=False)
+
 def is_consistent(t1, t2):
     """
     A binary relation denoted by ~ that determines if t1 is consistent with t2.
@@ -77,7 +74,6 @@ def is_consistent(t1, t2):
         return False
 
 
-@compatibility(is_backward_compatible=False)
 def is_more_precise(t1, t2):
     """
     A binary relation denoted by <= that determines if t1 is more precise than t2.

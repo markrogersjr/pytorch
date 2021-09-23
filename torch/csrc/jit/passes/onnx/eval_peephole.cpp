@@ -47,20 +47,14 @@ static void fuseConvBatchNorm(Block* b, ValueToParamPairMap& valsToParamsMap) {
       fuseConvBatchNorm(child_block, valsToParamsMap);
     }
     if (it->kind() == onnx::Conv) {
-      auto oldConv = *it;
-      if (oldConv->outputs().at(0)->uses().size() != 1) {
+      if (it->output()->uses().size() != 1) {
         continue;
       }
-      auto bnNode = oldConv->outputs().at(0)->uses()[0].user;
+      auto bnNode = it->output()->uses()[0].user;
       if (bnNode->kind() != onnx::BatchNormalization) {
         continue;
       }
-
-      if (oldConv->outputs().size() !=
-          bnNode->outputs().size()) { // BN layer is not in eval mode
-        continue;
-      }
-
+      auto oldConv = *it;
       auto epsilon = bnNode->f(attr::epsilon);
       auto convInputVals = getValues(oldConv, valsToParamsMap);
       if (convInputVals.size() < 1 ||
@@ -115,8 +109,11 @@ static void fuseConvBatchNorm(Block* b, ValueToParamPairMap& valsToParamsMap) {
         convB = bnB;
       }
 
-      Node* newConv = b->owningGraph()->create(onnx::Conv, 1);
-      newConv->outputs().at(0)->copyMetadata(bnNode->outputs().at(0));
+      Node* newConv =
+          b->owningGraph()->create(onnx::Conv, bnNode->outputs().size());
+      for (size_t i = 0; i < newConv->outputs().size(); ++i) {
+        newConv->outputs()[i]->copyMetadata(bnNode->outputs()[i]);
+      }
 
       newConv->copyAttributes(*oldConv);
       newConv->insertBefore(bnNode);
@@ -134,7 +131,9 @@ static void fuseConvBatchNorm(Block* b, ValueToParamPairMap& valsToParamsMap) {
       newConvB->inferTypeFrom(convB);
       newConv->addInput(newConvB);
 
-      bnNode->outputs().at(0)->replaceAllUsesWith(newConv->outputs().at(0));
+      bnNode->replaceAllUsesWith(newConv);
+      bnNode->removeAllInputs();
+      it->removeAllInputs();
       bnNode->destroy();
       it.destroyCurrent();
     }

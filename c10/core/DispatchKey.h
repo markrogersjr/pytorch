@@ -3,7 +3,7 @@
 #include <c10/macros/Macros.h>
 #include <c10/util/ArrayRef.h>
 #include <c10/util/Exception.h>
-#include <ostream>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -59,15 +59,8 @@ enum class DispatchKey : uint8_t {
   // CUDA]
   FPGA, // Xilinx support lives out of tree at
   // https://gitlab.com/pytorch-complex/vitis_kernels
-
-  // ONNX Runtime, lives out of tree at https://github.com/pytorch/ort and
-  // https://github.com/microsoft/onnxruntime, and is also used to test general
-  // backend/extension machinery in the core. cf:
-  // - test/cpp_extensions/ort_extension.cpp
-  // - test/test_torch.py
-  // - aten/src/ATen/test/extension_backend_test.cpp
-  ORT,
-
+  MSNPU, // unused externally, but tested at
+  // test/cpp_extensions/msnpu_extension.cpp
   XLA, // lives out of tree at https://github.com/pytorch/xla
   MLC, // lives out of tree at https://github.com/pytorch/MLCompute
   Vulkan,
@@ -121,7 +114,7 @@ enum class DispatchKey : uint8_t {
 
   // Here are reserved backends for user-defined backends, see Note [Private use
   // DispatchKey]
-  // To see some example about how to use this, check out ORT
+  // To see some example about how to use this, check out MSNPU
   PrivateUse1,
   PrivateUse2,
   PrivateUse3,
@@ -362,10 +355,6 @@ C10_API const char* toString(DispatchKey);
 C10_API std::ostream& operator<<(std::ostream&, DispatchKey);
 
 C10_API DispatchKey getAutogradKeyFromBackend(DispatchKey t);
-
-// Parses a string into a dispatch key.
-// If the string cannot be correctly parsed, throws an exception.
-C10_API c10::DispatchKey parseDispatchKey(const std::string& k);
 
 // These are some convenience identifiers for dispatch keys which are
 // shorter to type than their long counterparts.  Note that some of these

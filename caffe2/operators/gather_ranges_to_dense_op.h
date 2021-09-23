@@ -45,7 +45,6 @@ class GatherRangesToDenseOp final : public Operator<Context> {
     for (int i = 0; i < OutputSize(); ++i) {
       emptyRanges_.push_back(0);
       mismatchedRanges_.push_back(0);
-      mismatchedLengths_.push_back(set<int>());
     }
   }
 
@@ -129,7 +128,6 @@ class GatherRangesToDenseOp final : public Operator<Context> {
           // Note, empty ranges are not counted as mismatched because empty
           // are more common and more tolerable.
           mismatchedRanges_[j]++;
-          mismatchedLengths_[j].insert(rangeLength);
           continue;
         }
 
@@ -186,9 +184,7 @@ class GatherRangesToDenseOp final : public Operator<Context> {
             "/",
             totalRanges_,
             ") which exceeds ",
-            maxMismatchedRatio_,
-            ". The incorrect lengths include: ",
-            mismatchedLengths_[j]);
+            maxMismatchedRatio_);
       }
 
       // Only check when the ratio is not set to allow all examples to be empty.
@@ -220,7 +216,6 @@ class GatherRangesToDenseOp final : public Operator<Context> {
   int64_t totalRanges_ = 0;
   vector<int64_t> emptyRanges_;
   vector<int64_t> mismatchedRanges_;
-  vector<set<int>> mismatchedLengths_;
   // To avoid false alarm due to insufficient sample (e.g., first batch being
   // mismatched and causing 100% to be mismatched), use a threshold to ensure
   // enough samples are gathered before decideding whether there is an alarm or

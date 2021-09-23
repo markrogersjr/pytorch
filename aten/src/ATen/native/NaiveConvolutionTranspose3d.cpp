@@ -317,8 +317,8 @@ void slow_conv_transpose3d_out_cpu_template(
           // Do GEMM (note: this is a bit confusing because gemm assumes
           // column-major matrices)
           cpublas::gemm(
-              TransposeType::NoTranspose,
-              TransposeType::Transpose,
+              cpublas::NoTranspose,
+              cpublas::Transpose,
               n,
               m,
               k,
@@ -366,8 +366,8 @@ void slow_conv_transpose3d_out_cpu_template(
           // column-major matrices)
           if (bias.defined()) {
             cpublas::gemm(
-                TransposeType::Transpose,
-                TransposeType::NoTranspose,
+                cpublas::Transpose,
+                cpublas::NoTranspose,
                 n_,
                 m_,
                 k_,
@@ -579,8 +579,8 @@ void slow_conv_transpose3d_backward_out_cpu_template(
               ? grad_columns.data_ptr<scalar_t>()
               : grad_output_n.data_ptr<scalar_t>();
           cpublas::gemm(
-              TransposeType::NoTranspose,
-              TransposeType::NoTranspose,
+              cpublas::NoTranspose,
+              cpublas::NoTranspose,
               n,
               m,
               k,
@@ -819,8 +819,8 @@ void slow_conv_transpose3d_acc_grad_parameters_cpu(
                 ? columns.data_ptr<scalar_t>()
                 : grad_output_n.data_ptr<scalar_t>();
             cpublas::gemm(
-                TransposeType::Transpose,
-                TransposeType::NoTranspose,
+                cpublas::Transpose,
+                cpublas::NoTranspose,
                 n,
                 m,
                 k,

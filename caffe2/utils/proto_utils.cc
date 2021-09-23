@@ -323,12 +323,8 @@ C10_EXPORT ArgumentHelper::ArgumentHelper(const NetDef& netdef) {
   }
 }
 
-C10_EXPORT bool ArgumentHelper::HasArgument(c10::string_view name) const {
-#ifdef CAFFE2_ENABLE_REDUCED_STRINGS_IN_ARGUMENT_LOOKUP
+C10_EXPORT bool ArgumentHelper::HasArgument(const string& name) const {
   return arg_map_.count(name);
-#else
-  return arg_map_.count(std::string(name));
-#endif
 }
 
 namespace {
@@ -368,19 +364,18 @@ std::ostream& operator<<(std::ostream& output, const NetDef& n) {
     T, fieldname, enforce_lossless_conversion)                         \
   template <>                                                          \
   C10_EXPORT T ArgumentHelper::GetSingleArgument<T>(                   \
-      c10::string_view name, const T& default_value) const {           \
-    auto it = CAFFE2_ARG_MAP_FIND(arg_map_, name);                      \
-    if (it == arg_map_.end()) {                                         \
+      const string& name, const T& default_value) const {              \
+    if (arg_map_.count(name) == 0) {                                   \
       VLOG(1) << "Using default parameter value " << default_value     \
               << " for parameter " << name;                            \
       return default_value;                                            \
     }                                                                  \
     CAFFE_ENFORCE(                                                     \
-        it->second.has_##fieldname(),                                  \
+        arg_map_.at(name).has_##fieldname(),                           \
         "Argument ",                                                   \
         name,                                                          \
         " does not have the right field: expected field " #fieldname); \
-    auto value = it->second.fieldname();                               \
+    auto value = arg_map_.at(name).fieldname();                        \
     if (enforce_lossless_conversion) {                                 \
       auto supportsConversion =                                        \
           SupportsLosslessConversion<decltype(value), T>(value);       \
@@ -396,12 +391,11 @@ std::ostream& operator<<(std::ostream& output, const NetDef& n) {
   }                                                                    \
   template <>                                                          \
   C10_EXPORT bool ArgumentHelper::HasSingleArgumentOfType<T>(          \
-      c10::string_view name) const {                                   \
-    auto it = CAFFE2_ARG_MAP_FIND(arg_map_, name);                     \
-    if (it == arg_map_.end()) {                                        \
+      const string& name) const {                                      \
+    if (arg_map_.count(name) == 0) {                                   \
       return false;                                                    \
     }                                                                  \
-    return it->second.has_##fieldname();                               \
+    return arg_map_.at(name).has_##fieldname();                        \
   }
 
 INSTANTIATE_GET_SINGLE_ARGUMENT(float, f, false)
@@ -421,14 +415,13 @@ INSTANTIATE_GET_SINGLE_ARGUMENT(NetDef, n, false)
 #define INSTANTIATE_GET_REPEATED_ARGUMENT(                             \
     T, fieldname, enforce_lossless_conversion)                         \
   template <>                                                          \
-  C10_EXPORT std::vector<T> ArgumentHelper::GetRepeatedArgument<T>( \
-      c10::string_view name, const std::vector<T>& default_value) const { \
-    auto it = CAFFE2_ARG_MAP_FIND(arg_map_, name);                      \
-    if (it == arg_map_.end()) {                                         \
+  C10_EXPORT std::vector<T> ArgumentHelper::GetRepeatedArgument<T>(         \
+      const string& name, const std::vector<T>& default_value) const { \
+    if (arg_map_.count(name) == 0) {                                   \
       return default_value;                                            \
     }                                                                  \
-    std::vector<T> values;                                           \
-    for (const auto& v : it->second.fieldname()) {                     \
+    std::vector<T> values;                                                  \
+    for (const auto& v : arg_map_.at(name).fieldname()) {              \
       if (enforce_lossless_conversion) {                               \
         auto supportsConversion =                                      \
             SupportsLosslessConversion<decltype(v), T>(v);             \
@@ -538,7 +531,7 @@ C10_EXPORT bool HasInput(const OperatorDef& op, const std::string& input) {
 // Return the argument index or -1 if it does not exist.
 C10_EXPORT int GetArgumentIndex(
     const google::protobuf::RepeatedPtrField<Argument>& args,
-    c10::string_view name) {
+    const string& name) {
   int index = 0;
   for (const Argument& arg : args) {
     if (arg.name() == name) {
@@ -551,7 +544,7 @@ C10_EXPORT int GetArgumentIndex(
 
 C10_EXPORT const Argument& GetArgument(
     const OperatorDef& def,
-    c10::string_view name) {
+    const string& name) {
   int index = GetArgumentIndex(def.arg(), name);
   if (index != -1) {
     return def.arg(index);
@@ -564,7 +557,7 @@ C10_EXPORT const Argument& GetArgument(
   }
 }
 
-C10_EXPORT const Argument& GetArgument(const NetDef& def, c10::string_view name) {
+C10_EXPORT const Argument& GetArgument(const NetDef& def, const string& name) {
   int index = GetArgumentIndex(def.arg(), name);
   if (index != -1) {
     return def.arg(index);
@@ -579,7 +572,7 @@ C10_EXPORT const Argument& GetArgument(const NetDef& def, c10::string_view name)
 
 C10_EXPORT const Argument* GetArgumentPtr(
     const OperatorDef& def,
-    c10::string_view name) {
+    const string& name) {
   int index = GetArgumentIndex(def.arg(), name);
   if (index != -1) {
     return &def.arg(index);
@@ -590,7 +583,7 @@ C10_EXPORT const Argument* GetArgumentPtr(
 
 C10_EXPORT const Argument* GetArgumentPtr(
     const NetDef& def,
-    c10::string_view name) {
+    const string& name) {
   int index = GetArgumentIndex(def.arg(), name);
   if (index != -1) {
     return &def.arg(index);
@@ -601,7 +594,7 @@ C10_EXPORT const Argument* GetArgumentPtr(
 
 C10_EXPORT bool GetFlagArgument(
     const google::protobuf::RepeatedPtrField<Argument>& args,
-    c10::string_view name,
+    const string& name,
     bool default_value) {
   int index = GetArgumentIndex(args, name);
   if (index != -1) {
@@ -616,13 +609,13 @@ C10_EXPORT bool GetFlagArgument(
 
 C10_EXPORT bool GetFlagArgument(
     const OperatorDef& def,
-    c10::string_view name,
+    const string& name,
     bool default_value) {
   return GetFlagArgument(def.arg(), name, default_value);
 }
 
 C10_EXPORT bool
-GetFlagArgument(const NetDef& def, c10::string_view name, bool default_value) {
+GetFlagArgument(const NetDef& def, const string& name, bool default_value) {
   return GetFlagArgument(def.arg(), name, default_value);
 }
 

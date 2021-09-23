@@ -19,7 +19,7 @@ using namespace analysis;
 template <typename Container>
 BoundsInfo mergeTensorAccesses(
     const Container& accesses,
-    const std::unordered_map<VarPtr, BufPtr>& varToBuf,
+    const std::unordered_map<Var*, Buf*>& varToBuf,
     bool distinctAccessKinds) {
   BoundsInfo ret;
   for (auto& access : accesses) {
@@ -29,8 +29,8 @@ BoundsInfo mergeTensorAccesses(
     }
 
     auto vtbIt = varToBuf.find(access->var());
-    TORCH_INTERNAL_ASSERT(vtbIt != varToBuf.end(), buildErrorMessage());
-    BufPtr buf = vtbIt->second;
+    TORCH_INTERNAL_ASSERT(vtbIt != varToBuf.end());
+    Buf* buf = vtbIt->second;
     std::vector<TensorAccessBoundsInfo>& infos = ret[buf];
 
     bool added = false;
@@ -38,15 +38,13 @@ BoundsInfo mergeTensorAccesses(
     for (auto& TABI : infos) {
       TensorAccessKind kind = access->isWrite() ? kStore : kLoad;
       if (!distinctAccessKinds || kind == TABI.kind) {
-        TORCH_INTERNAL_ASSERT(
-            TABI.start.size() == access->bounds().size(), buildErrorMessage());
-        TORCH_INTERNAL_ASSERT(
-            TABI.stop.size() == access->bounds().size(), buildErrorMessage());
+        TORCH_INTERNAL_ASSERT(TABI.start.size() == access->bounds().size());
+        TORCH_INTERNAL_ASSERT(TABI.stop.size() == access->bounds().size());
         for (size_t i = 0; i < TABI.start.size(); ++i) {
           TABI.start[i] = IRSimplifier::simplify(
-              alloc<Min>(TABI.start[i], access->bounds()[i].start, true));
+              new Min(TABI.start[i], access->bounds()[i].start, true));
           TABI.stop[i] = IRSimplifier::simplify(
-              alloc<Max>(TABI.stop[i], access->bounds()[i].end, true));
+              new Max(TABI.stop[i], access->bounds()[i].end, true));
           added = true;
 
           if (kind != TABI.kind) {
@@ -72,27 +70,27 @@ BoundsInfo mergeTensorAccesses(
   return ret;
 }
 
-std::unordered_map<VarPtr, BufPtr> getAllBufs(StmtPtr s) {
-  std::unordered_map<VarPtr, BufPtr> varToBuf;
+std::unordered_map<Var*, Buf*> getAllBufs(Stmt* s) {
+  std::unordered_map<Var*, Buf*> varToBuf;
 
   auto bufs = NodeFinder<Buf>::find(s);
-  for (auto b : bufs) {
+  for (auto* b : bufs) {
     varToBuf[b->base_handle()] = b;
   }
   return varToBuf;
 }
 
-std::unordered_map<VarPtr, BufPtr> getAllBufs(ExprPtr e) {
-  std::unordered_map<VarPtr, BufPtr> varToBuf;
+std::unordered_map<Var*, Buf*> getAllBufs(Expr* e) {
+  std::unordered_map<Var*, Buf*> varToBuf;
 
   auto bufs = NodeFinder<Buf>::find(e);
-  for (auto b : bufs) {
+  for (auto* b : bufs) {
     varToBuf[b->base_handle()] = b;
   }
   return varToBuf;
 }
 
-BoundsInfo inferBounds(StmtPtr s, bool distinctAccessKinds) {
+BoundsInfo inferBounds(Stmt* s, bool distinctAccessKinds) {
   auto varToBuf = getAllBufs(s);
 
   MemDependencyChecker checker;
@@ -104,7 +102,7 @@ BoundsInfo inferBounds(StmtPtr s, bool distinctAccessKinds) {
 
 BoundsInfo getInferredBounds(
     MemDependencyChecker& analyzer,
-    StmtPtr s,
+    Stmt* s,
     bool distinctAccessKinds) {
   return mergeTensorAccesses(
       analyzer.accessesWithin(s), getAllBufs(s), distinctAccessKinds);
@@ -112,7 +110,7 @@ BoundsInfo getInferredBounds(
 
 BoundsInfo getInferredBounds(
     MemDependencyChecker& analyzer,
-    ExprPtr e,
+    Expr* e,
     bool distinctAccessKinds) {
   return mergeTensorAccesses(
       analyzer.accessesWithin(e), getAllBufs(e), distinctAccessKinds);
@@ -159,10 +157,10 @@ void printBoundsInfo(const BoundsInfo& v) {
   std::cerr << "}\n";
 }
 
-std::vector<ExprPtr> getBoundExtents(
+std::vector<Expr*> getBoundExtents(
     const std::vector<TensorAccessBoundsInfo>& infos) {
-  std::vector<ExprPtr> starts;
-  std::vector<ExprPtr> stops;
+  std::vector<Expr*> starts;
+  std::vector<Expr*> stops;
 
   // Find the safe size of the temprorary buffer by determining the outer
   // extents of a union of all bounds.
@@ -172,22 +170,21 @@ std::vector<ExprPtr> getBoundExtents(
         starts.push_back(p.start[i]);
       } else {
         starts[i] =
-            IRSimplifier::simplify(alloc<Min>(starts[i], p.start[i], true));
+            IRSimplifier::simplify(new Min(starts[i], p.start[i], true));
       }
 
       if (stops.size() <= i) {
         stops.push_back(p.stop[i]);
       } else {
-        stops[i] =
-            IRSimplifier::simplify(alloc<Max>(stops[i], p.stop[i], true));
+        stops[i] = IRSimplifier::simplify(new Max(stops[i], p.stop[i], true));
       }
     }
   }
 
-  std::vector<ExprPtr> extents;
+  std::vector<Expr*> extents;
   for (size_t i = 0; i < starts.size(); ++i) {
-    ExprPtr dim = IRSimplifier::simplify(
-        alloc<Add>(alloc<Sub>(stops[i], starts[i]), immLike(stops[i], 1)));
+    Expr* dim = IRSimplifier::simplify(
+        new Add(new Sub(stops[i], starts[i]), new IntImm(1)));
 
     extents.push_back(dim);
   }
@@ -213,7 +210,7 @@ BoundSet convertBounds(
 
 BoundSet convertBounds(
     BoundsInfo& bounds,
-    BufPtr buf,
+    Buf* buf,
     TensorAccessKind filter = kMutate) {
   auto it = bounds.find(buf);
   if (it == bounds.end()) {
@@ -225,8 +222,8 @@ BoundSet convertBounds(
 
 HazardKind getPotentialHazards(
     MemDependencyChecker& analyzer,
-    StmtPtr A,
-    StmtPtr B) {
+    Stmt* A,
+    Stmt* B) {
   BoundsInfo aBounds = getInferredBounds(analyzer, A, true);
   BoundsInfo bBounds = getInferredBounds(analyzer, B, true);
 
@@ -234,7 +231,7 @@ HazardKind getPotentialHazards(
   BoundSet aReads;
 
   for (auto& pair : bBounds) {
-    BufPtr buf = pair.first;
+    Buf* buf = pair.first;
     if (aBounds.find(buf) == aBounds.end()) {
       continue;
     }
@@ -277,8 +274,7 @@ HazardKind getPotentialHazards(
 }
 
 IndexBounds getIndexBounds(const TensorAccessBoundsInfo& tabi) {
-  TORCH_INTERNAL_ASSERT(
-      tabi.start.size() == tabi.stop.size(), buildErrorMessage());
+  TORCH_INTERNAL_ASSERT(tabi.start.size() == tabi.stop.size());
   IndexBounds ret(tabi.start.size());
   if (tabi.start.empty()) {
     return ret;
@@ -306,7 +302,7 @@ bool hasConflictingOverlap(
     const BoundsInfo& bBounds,
     TensorAccessKind aFilter = kMutate,
     TensorAccessKind bFilter = kMutate) {
-  using IndexBoundsInfo = std::unordered_map<BufPtr, std::vector<IndexBounds>>;
+  using IndexBoundsInfo = std::unordered_map<Buf*, std::vector<IndexBounds>>;
   IndexBoundsInfo aIndexBoundsInfo;
   for (auto& aBound : aBounds) {
     aIndexBoundsInfo[aBound.first] = getIndexBounds(aBound.second, aFilter);
@@ -344,8 +340,8 @@ bool hasConflictingOverlap(
 
 bool hasConflictingOverlap(
     analysis::MemDependencyChecker& analyzer,
-    StmtPtr A,
-    StmtPtr B) {
+    Stmt* A,
+    Stmt* B) {
   BoundsInfo aBounds = getInferredBounds(analyzer, A, true);
   BoundsInfo bBounds = getInferredBounds(analyzer, B, true);
   return hasConflictingOverlap(aBounds, bBounds);
@@ -353,8 +349,8 @@ bool hasConflictingOverlap(
 
 bool isOverlapping(
     analysis::MemDependencyChecker& analyzer,
-    StorePtr S1,
-    StorePtr S2) {
+    Store* S1,
+    Store* S2) {
   BoundsInfo s1Bounds = getInferredBounds(analyzer, S1, true);
   BoundsInfo s2Bounds = getInferredBounds(analyzer, S2, true);
   return hasConflictingOverlap(s1Bounds, s2Bounds, kStore, kStore);
@@ -362,8 +358,8 @@ bool isOverlapping(
 
 bool isOverlapping(
     analysis::MemDependencyChecker& analyzer,
-    StorePtr S,
-    LoadPtr L) {
+    Store* S,
+    Load* L) {
   BoundsInfo sBounds = getInferredBounds(analyzer, S, true);
   BoundsInfo lBounds = getInferredBounds(analyzer, L, true);
   return hasConflictingOverlap(sBounds, lBounds, kStore, kLoad);

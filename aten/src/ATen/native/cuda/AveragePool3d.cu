@@ -5,7 +5,6 @@
 #include <ATen/cuda/detail/TensorInfo.cuh>
 #include <ATen/cuda/detail/IndexUtils.cuh>
 #include <ATen/cuda/detail/KernelUtils.h>
-#include <ATen/native/cuda/KernelUtils.cuh>
 #include <THC/THCAtomics.cuh>
 #include <THC/THCNumerics.cuh>
 #include <c10/macros/Macros.h>
@@ -211,7 +210,7 @@ __global__ void avg_pool3d_cuda_update_grad_input_atomic(
   int dT, int dH, int dW,
   int padT, int padH, int padW,
   bool count_include_pad,
-  int offsetZ, int divisor_override, const int gradInput_numel)
+  int offsetZ, int divisor_override)
 {
   int oCol   = blockIdx.x * blockDim.x + threadIdx.x;
   int oRow   = blockIdx.y * blockDim.y + threadIdx.y;
@@ -254,8 +253,7 @@ __global__ void avg_pool3d_cuda_update_grad_input_atomic(
       {
         for (int iCol = wstart; iCol < wend; ++iCol)
         {
-          const int index = slice * gradInput.stride(0) + iFrame * gradInput.stride(1) + iRow * gradInput.stride(2) + iCol * gradInput.stride(3);
-          fastAtomicAdd(gradInput.data(), index, gradInput_numel, val, true);
+          gpuAtomicAddNoReturn(&gradInput[slice][iFrame][iRow][iCol], val);
         }
       }
     }
@@ -570,7 +568,7 @@ TORCH_IMPL_FUNC(avg_pool3d_backward_out_cuda) (
                   dT, dH, dW,
                   padT, padH, padW,
                   count_include_pad,
-                  offsetZ, divisor, work_grad_input.numel());
+                  offsetZ, divisor);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
           }
           else {

@@ -5,6 +5,7 @@
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/ir/irparser.h>
 #include <torch/csrc/jit/passes/tensorexpr_fuser.h>
+#include <torch/csrc/jit/tensorexpr/mem_arena.h>
 #include <torch/csrc/jit/testing/file_check.h>
 #include <sstream>
 
@@ -14,15 +15,19 @@ namespace jit {
 using namespace torch::jit::tensorexpr;
 
 struct WithCPUFuser {
-  WithCPUFuser(bool val = true) : cpuFuserEnabled(canFuseOnCPU()) {
+  WithCPUFuser(bool val = true)
+      : cpuFuserEnabled(canFuseOnCPU()), parallel(texprParallelCPUEnabled()) {
     overrideCanFuseOnCPU(val);
+    setTexprParallelCPUEnabled(true);
   }
 
   ~WithCPUFuser() {
     overrideCanFuseOnCPU(cpuFuserEnabled);
+    setTexprParallelCPUEnabled(parallel);
   }
 
   bool cpuFuserEnabled;
+  bool parallel;
 };
 
 TEST(TEFuserPass, FuserPass_1) {

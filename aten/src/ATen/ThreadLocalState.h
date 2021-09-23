@@ -6,7 +6,6 @@
 #include <c10/util/ThreadLocalDebugInfo.h>
 
 #include <ATen/record_function.h>
-#include <ATen/core/PythonModeTLS.h>
 
 namespace at {
 
@@ -17,12 +16,10 @@ class TORCH_API ThreadLocalState {
  public:
   // Saves the thread local variables' values and
   // returns them as a ThreadLocalState
-  ThreadLocalState();
-
-  // set_grad_mode - force the value of the grad mode TLS in
-  //  the current state object. This is used for example in the
-  //  autograd engine.
-  void set_grad_mode(bool enabled);
+  // keep_grad_mode - whether grad mode has to be preserved
+  //  (e.g. not preserved when passing from forward pass into
+  //   the autograd engine, autograd engine takes care of grad mode)
+  ThreadLocalState(bool keep_grad_mode = true);
 
   // Sets thread local variables in the current thread,
   // according to the thread boundary specified
@@ -38,10 +35,13 @@ class TORCH_API ThreadLocalState {
   // RecordFunction TLS
   RecordFunctionTLS rf_tls_;
 
-  // TLS for AutogradModes
-  AutogradState autograd_tls_;
+#if !defined(CAFFE2_IS_XPLAT_BUILD) && !defined(C10_MOBILE)
+  bool keep_grad_mode_ = true;
+  bool grad_mode_enabled_;
+#endif
 
-  std::shared_ptr<TorchDispatchTypeObject> python_mode_state_;
+  // TLS for InferenceMode
+  bool inference_mode_enabled_;
 
   // TLS for saved tensors default hooks
   std::pair<PyObject*, PyObject*> saved_tensors_default_hooks_;

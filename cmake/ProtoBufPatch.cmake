@@ -4,7 +4,7 @@
 
 file(READ ${FILENAME} content)
 
-if(NOT SYSTEM_PROTOBUF)
+if(LOCAL_PROTOBUF)
   # protobuf-3.6.0 pattern
   string(
     REPLACE
@@ -77,7 +77,7 @@ if(NOT SYSTEM_PROTOBUF)
 
     file(WRITE ${SOURCE_FILENAME} "${content_cc}")
   endif()
-endif(NOT SYSTEM_PROTOBUF)
+endif()
 
 # constexpr int TensorBoundShape_DimType_DimType_ARRAYSIZE = TensorBoundShape_DimType_DimType_MAX + 1;
 # throws

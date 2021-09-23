@@ -3,7 +3,6 @@
 #include "caffe2/core/scope_guard.h"
 
 #include <iomanip>
-#include <iostream>
 #include <mutex>
 
 C10_DEFINE_bool(

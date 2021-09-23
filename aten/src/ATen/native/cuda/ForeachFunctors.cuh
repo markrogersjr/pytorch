@@ -1,11 +1,15 @@
 #pragma once
 #include <ATen/native/ForeachUtils.h>
 #include <ATen/native/cuda/MultiTensorApply.cuh>
-#include <ATen/OpMathType.h>
 
 namespace at { namespace native {
 
 namespace {
+
+// For FP16 or BFloat16 inputs, ops should perform internal math in FP32.
+template<typename scalar_t> struct get_opmath_t { using opmath_t = scalar_t; };
+template<> struct get_opmath_t<at::Half> { using opmath_t = float; };
+template<> struct get_opmath_t<at::BFloat16> { using opmath_t = float; };
 
 // Initializes args and checks if all args are aligned
 template<int depth, typename T>
@@ -154,7 +158,7 @@ __device__ __forceinline__ void pointwise_op_scalar(
 //
 template<typename T, int depth, int r_args_depth, int res_arg_index>
 struct BinaryOpScalarFunctor {
-    using opmath_t = at::opmath_type<T>;
+    using opmath_t = typename get_opmath_t<T>::opmath_t;
     template<typename Op> __device__ __forceinline__ void operator() (
         int chunk_size,
         TensorListMetadata<depth>& tl,
@@ -175,7 +179,7 @@ struct BinaryOpScalarFunctor {
 
 template<typename T, int depth, int r_args_depth, int res_arg_index>
 struct BinaryOpScalarListFunctor {
-    using opmath_t = at::opmath_type<T>;
+    using opmath_t = typename get_opmath_t<T>::opmath_t;
     template<typename Op> __device__ __forceinline__ void operator() (
         int chunk_size,
         TensorListScalarListMetadata<opmath_t, depth>& tl,
@@ -196,7 +200,7 @@ struct BinaryOpScalarListFunctor {
 
 template<typename T, int depth, int r_args_depth, int res_arg_index>
 struct BinaryOpListAlphaFunctor {
-    using opmath_t = at::opmath_type<T>;
+    using opmath_t = typename get_opmath_t<T>::opmath_t;
     template<typename Op> __device__ __forceinline__ void operator() (
         int chunk_size,
         TensorListMetadata<depth>& tl,
@@ -283,7 +287,7 @@ struct ZeroFunctor {
 
 template<typename T, int depth, int r_args_depth, int res_arg_index>
 struct UnaryOpFunctor {
-    using opmath_t = at::opmath_type<T>;
+    using opmath_t = typename get_opmath_t<T>::opmath_t;
     template<typename Op> __device__ __forceinline__ void operator() (
         int chunk_size,
         TensorListMetadata<depth>& tl,
@@ -329,7 +333,7 @@ struct UnaryOpFunctor {
 
 template<typename T, int depth, int r_args_depth, int res_arg_index>
 struct PointwiseOpScalarFunctor {
-    using opmath_t = at::opmath_type<T>;
+    using opmath_t = typename get_opmath_t<T>::opmath_t;
     template<typename Op> __device__ __forceinline__ void operator() (
         int chunk_size,
         TensorListMetadata<depth>& tl,
@@ -350,7 +354,7 @@ struct PointwiseOpScalarFunctor {
 
 template<typename T, int depth, int r_args_depth, int res_arg_index>
 struct PointwiseOpScalarListFunctor {
-    using opmath_t = at::opmath_type<T>;
+    using opmath_t = typename get_opmath_t<T>::opmath_t;
     template<typename Op> __device__ __forceinline__ void operator() (
         int chunk_size,
         TensorListScalarListMetadata<opmath_t, depth>& tl,
@@ -371,7 +375,7 @@ struct PointwiseOpScalarListFunctor {
 
 template<typename T, int depth>
 struct PointwiseOpListFunctor {
-    using opmath_t = at::opmath_type<T>;
+    using opmath_t = typename get_opmath_t<T>::opmath_t;
     template<typename Op> __device__ __forceinline__ void operator() (
         int chunk_size,
         TensorListMetadata<depth>& tl,

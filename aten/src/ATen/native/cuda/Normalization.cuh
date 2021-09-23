@@ -1649,8 +1649,7 @@ at::Tensor batch_norm_backward_elemt_channels_last_cuda_template(
   const auto stride = input.sizes()[1];
   const auto reduction_size = input.numel() / stride;
 
-  // Input is guarunteed to be channels-last compatible
-  at::Tensor grad_input = at::empty_like(input);
+  at::Tensor grad_input = at::empty_like(input, input.suggest_memory_format());
 
   dim3 block;
   dim3 grid;
@@ -1717,8 +1716,7 @@ at::Tensor batch_norm_backward_elemt_channels_last_cuda_template(
   const auto reduction_size = input.numel() / stride;
   auto norm_fct = 1.0 / reduction_size;
 
-  // Input is guarunteed to be channels-last compatible
-  at::Tensor grad_input = at::empty_like(input);
+  at::Tensor grad_input = at::empty_like(input, input.suggest_memory_format());
 
   dim3 block;
   dim3 grid;

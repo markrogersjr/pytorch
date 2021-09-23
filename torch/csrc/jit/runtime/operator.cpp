@@ -353,10 +353,10 @@ void registerOperator(Operator&& op) {
           op.schema().name(),
           ". File a bug to add a case for this operator.\n");
     }
-    if (aliasAnalysisHasSpecialCaseFor(s) &&
+    if (!aliasAnalysisHasSpecialCaseFor(s) &&
         op.aliasAnalysisKind() == AliasAnalysisKind::CONSERVATIVE) {
       AT_ERROR(
-          "Conflict in special casing in alias analysis for non-schematized"
+          "Missing special case in alias analysis for non-schematized"
           " operator ",
           op.schema().name(),
           ". File a bug to add a case for this operator.\n");

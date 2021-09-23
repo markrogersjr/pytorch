@@ -207,7 +207,7 @@ Tensor& activation_(
 
   TORCH_CHECK(
       self.is_vulkan(),
-      "Vulkan: In-place operator is only supported on Vulkan tensors.");
+      "Vulkan: In-place clamp is only supported on Vulkan tensors.");
 
   vTensor& v_self = convert(self);
 
@@ -289,10 +289,9 @@ Tensor& hardsigmoid_(Tensor& self) {
   return ops::activation_(self, VK_KERNEL(hardsigmoid_));
 }
 
-Tensor activation_scalar(
+Tensor hardshrink(
     const Tensor& self_arg,
-    const Scalar& scalar_arg,
-    const api::Shader::Descriptor& shader_descriptor) {
+    const Scalar& lambd) {
   api::Context* const context = api::context();
 
   const Tensor self = self_arg.is_vulkan() ? self_arg : self_arg.vulkan();
@@ -311,11 +310,11 @@ Tensor activation_scalar(
       const struct Block final {
         uvec3 extents;
         uint32_t _;
-        float scalar_value;
+        float lambd;
       } block {
         v_output.extents(),
         0u,
-        scalar_arg.to<float>(),
+        lambd.to<float>(),
       };
 
       context->dispatch(
@@ -325,7 +324,7 @@ Tensor activation_scalar(
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
           },
-          shader_descriptor,
+          VK_KERNEL(hardshrink),
           v_output.extents(),
           context->gpu().adapter->local_work_group_size(),
           // Write-only access bypasses synchronization but inserts appropriate
@@ -352,15 +351,14 @@ Tensor activation_scalar(
   return convert(v_output);
 }
 
-Tensor& activation_scalar_(
+Tensor& hardshrink_(
     Tensor& self,
-    const Scalar& scalar_arg,
-    const api::Shader::Descriptor& shader_descriptor) {
+    const Scalar& lambd) {
   api::Context* const context = api::context();
 
   TORCH_CHECK(
       self.is_vulkan(),
-      "Vulkan: In-place operator is only supported on Vulkan tensors.");
+      "Vulkan: In-place hardshrink is only supported on Vulkan tensors.");
 
   vTensor& v_self = convert(self);
 
@@ -371,11 +369,11 @@ Tensor& activation_scalar_(
       const struct Block final {
         uvec3 extents;
         uint32_t _;
-        float scalar_value;
+        float lambd;
       } block {
         v_self.extents(),
         0u,
-        scalar_arg.to<float>(),
+        lambd.to<float>(),
       };
 
       context->dispatch(
@@ -384,7 +382,7 @@ Tensor& activation_scalar_(
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
           },
-          shader_descriptor,
+          VK_KERNEL(hardshrink_),
           v_self.extents(),
           context->gpu().adapter->local_work_group_size(),
           // Read-Write access triggers an async synchronization if necessory
@@ -404,30 +402,6 @@ Tensor& activation_scalar_(
   command_pool.submit(context->gpu().queue, command_buffer);
 
   return self;
-}
-
-Tensor hardshrink(
-    const Tensor& self_arg,
-    const Scalar& lambd) {
-  return ops::activation_scalar(self_arg, lambd, VK_KERNEL(hardshrink));
-}
-
-Tensor& hardshrink_(
-    Tensor& self,
-    const Scalar& lambd) {
-  return ops::activation_scalar_(self, lambd, VK_KERNEL(hardshrink_));
-}
-
-Tensor leaky_relu(
-    const Tensor& self_arg,
-    const Scalar& negative_slope) {
-  return ops::activation_scalar(self_arg, negative_slope, VK_KERNEL(leaky_relu));
-}
-
-Tensor& leaky_relu_(
-    Tensor& self,
-    const Scalar& negative_slope) {
-  return ops::activation_scalar_(self, negative_slope, VK_KERNEL(leaky_relu_));
 }
 
 Tensor sigmoid(const Tensor& self) {
@@ -453,14 +427,12 @@ TORCH_LIBRARY_IMPL(aten, Vulkan, m) {
   m.impl(TORCH_SELECTIVE_NAME("aten::clamp_"), TORCH_FN(clamp_));
   m.impl(TORCH_SELECTIVE_NAME("aten::hardsigmoid"), hardsigmoid);
   m.impl(TORCH_SELECTIVE_NAME("aten::hardsigmoid_"), hardsigmoid_);
-  m.impl(TORCH_SELECTIVE_NAME("aten::hardshrink"), hardshrink);
-  m.impl(TORCH_SELECTIVE_NAME("aten::hardshrink_"), hardshrink_);
+  m.impl(TORCH_SELECTIVE_NAME("aten::hardshrink"), TORCH_FN(hardshrink));
+  m.impl(TORCH_SELECTIVE_NAME("aten::hardshrink_"), TORCH_FN(hardshrink_));
   m.impl(TORCH_SELECTIVE_NAME("aten::hardswish"), hardswish);
   m.impl(TORCH_SELECTIVE_NAME("aten::hardswish_"), hardswish_);
   m.impl(TORCH_SELECTIVE_NAME("aten::hardtanh"), hardtanh);
   m.impl(TORCH_SELECTIVE_NAME("aten::hardtanh_"), hardtanh_);
-  m.impl(TORCH_SELECTIVE_NAME("aten::leaky_relu"), leaky_relu);
-  m.impl(TORCH_SELECTIVE_NAME("aten::leaky_relu_"), leaky_relu_);
   m.impl(TORCH_SELECTIVE_NAME("aten::sigmoid"), sigmoid);
   m.impl(TORCH_SELECTIVE_NAME("aten::sigmoid_"), sigmoid_);
   m.impl(TORCH_SELECTIVE_NAME("aten::tanh"), tanh);

@@ -246,9 +246,7 @@ bool EqualNode::operator()(const Node* lhs, const Node* rhs) const {
   if (lhs_outputs.size() != rhs_outputs.size())
     return false;
   for (const auto i : c10::irange(lhs_outputs.size())) {
-    const auto& lt = lhs_outputs[i]->type();
-    const auto& rt = rhs_outputs[i]->type();
-    if (!(lt == rt || *lt == *rt))
+    if (*lhs_outputs[i]->type() != *rhs_outputs[i]->type())
       return false;
   }
 

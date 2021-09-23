@@ -563,9 +563,7 @@ class LSTM(RNNBase):
     Attributes:
         weight_ih_l[k] : the learnable input-hidden weights of the :math:`\text{k}^{th}` layer
             `(W_ii|W_if|W_ig|W_io)`, of shape `(4*hidden_size, input_size)` for `k = 0`.
-            Otherwise, the shape is `(4*hidden_size, num_directions * hidden_size)`. If
-            ``proj_size > 0`` was specified, the shape will be
-            `(4*hidden_size, num_directions * proj_size)` for `k > 0`
+            Otherwise, the shape is `(4*hidden_size, num_directions * hidden_size)`
         weight_hh_l[k] : the learnable hidden-hidden weights of the :math:`\text{k}^{th}` layer
             `(W_hi|W_hf|W_hg|W_ho)`, of shape `(4*hidden_size, hidden_size)`. If ``proj_size > 0``
             was specified, the shape will be `(4*hidden_size, proj_size)`.

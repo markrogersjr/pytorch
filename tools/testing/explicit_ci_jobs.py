@@ -5,7 +5,6 @@ import textwrap
 import subprocess
 import pathlib
 import argparse
-import fnmatch
 
 from typing import Dict, List, Any
 
@@ -108,7 +107,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--job", action="append", help="job name", default=[])
     parser.add_argument(
-        "--filter-gha", help="keep only these github actions (glob match)", default=''
+        "--keep-gha", action="store_true", help="don't delete GitHub actions"
     )
     parser.add_argument(
         "--make-commit", action="store_true", help="add change to git with to a do-not-merge commit"
@@ -124,12 +123,11 @@ if __name__ == "__main__":
     with open(CONFIG_YML, "w") as f:
         yaml.dump(config_yml, f)
 
-    if args.filter_gha:
+    if not args.keep_gha:
         for relative_file in WORKFLOWS_DIR.iterdir():
-            path = REPO_ROOT.joinpath(relative_file)
-            if not fnmatch.fnmatch(path.name, args.filter_gha):
-                touched_files.append(path)
-                path.resolve().unlink()
+            path = WORKFLOWS_DIR.joinpath(relative_file)
+            touched_files.append(path)
+            path.unlink()
 
     if args.make_commit:
         jobs_str = '\n'.join([f" * {job}" for job in args.job])

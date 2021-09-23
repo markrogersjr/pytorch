@@ -511,7 +511,7 @@ void Graph::lint() const {
   // - Params and return do NOT occur in nodes
   // - next_unique_ is greater than all uniques in graph
   // - uniques in all_nodes are unique
-  // - every use will occur later in the toposort
+  // - every use will occur later in the topsort
 
   struct LintScope {
     LintScope() = default;
@@ -787,9 +787,7 @@ bool Value::mustBeNone() const {
 }
 bool Value::mustNotBeNone() const {
   return node_->kind() != prim::AutogradAdd && type() != NoneType::get() &&
-      !type()->cast<OptionalType>() &&
-      !(type()->cast<UnionType>() &&
-        type()->expect<UnionType>()->canHoldType(NoneType::get()));
+      !type()->cast<OptionalType>();
 }
 
 std::string Value::debugNameBase() const {
@@ -1767,23 +1765,20 @@ Node* Graph::createEnumValue(Value* e) {
   return n;
 }
 
-Node* Graph::createList(
-    const TypePtr& contained_type,
-    at::ArrayRef<Value*> values) {
+Node* Graph::createList(const TypePtr& elem_type, at::ArrayRef<Value*> values) {
   auto n = create(prim::ListConstruct, values);
   for (const auto& v : values) {
     TORCH_CHECK(
-        v->type()->isSubtypeOf(contained_type),
+        v->type()->isSubtypeOf(elem_type),
         "Expected a list element that subtypes '",
-        contained_type->repr_str(),
+        elem_type->repr_str(),
         "' but got an element of type '",
         v->type()->repr_str(),
         "'");
   }
-  n->output()->setType(ListType::create(contained_type));
+  n->output()->setType(ListType::create(elem_type));
   return n;
 }
-
 Node* Graph::createListUnpack(Value* v, size_t size) {
   ListTypePtr list_type = v->type()->expect<ListType>();
   TypePtr elem_type = list_type->getElementType();

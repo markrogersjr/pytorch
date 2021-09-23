@@ -25,9 +25,8 @@ def run_rnn(name, rnn_creator, nloops=5,
 
         # "Update" parameters
         if modeldef.backward is not None:
-            with torch.no_grad():
-                for param in modeldef.params:
-                    param.grad.zero_()
+            for param in modeldef.params:
+                param.grad.data.zero_()
         torch.cuda.synchronize()
 
     assert device == 'cuda'

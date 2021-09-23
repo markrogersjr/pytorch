@@ -14,8 +14,8 @@ Example of usage:
 ::
 
   from torch.distributed.elastic import events
-  event = events.Event(name="test_event", source=events.EventSource.WORKER, metadata={...})
-  events.get_logging_handler(destination="console").info(event)
+  event = Event(name="test_event", source=EventSource.WORKER, metadata={...})
+  events.get_events_logger(destination="default").info(event)
 
 """
 

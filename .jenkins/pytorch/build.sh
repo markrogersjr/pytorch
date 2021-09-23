@@ -49,12 +49,17 @@ if [[ "$BUILD_ENVIRONMENT" == *cuda* ]]; then
   nvcc --version
 fi
 
+if [[ "$BUILD_ENVIRONMENT" == *coverage* ]]; then
+  # enable build option in CMake
+  export USE_CPP_CODE_COVERAGE=ON
+fi
+
 if [[ "$BUILD_ENVIRONMENT" == *cuda11* ]]; then
   # enable split torch_cuda build option in CMake
   export BUILD_SPLIT_CUDA=ON
 fi
 
-if [[ ${BUILD_ENVIRONMENT} == *"pure_torch"* || ${BUILD_ENVIRONMENT} == *"puretorch"* ]]; then
+if [[ ${BUILD_ENVIRONMENT} == *"pure_torch"* ]]; then
   export BUILD_CAFFE2=OFF
 fi
 
@@ -83,8 +88,6 @@ if ! which conda; then
   else
     export USE_MKLDNN=0
   fi
-else
-  export CMAKE_PREFIX_PATH=/opt/conda
 fi
 
 if [[ "$BUILD_ENVIRONMENT" == *libtorch* ]]; then
@@ -219,11 +222,7 @@ if [[ "$BUILD_ENVIRONMENT" == *-bazel-* ]]; then
 
   get_bazel
 
-  # first build the whole torch for CPU-only
   tools/bazel build --config=no-tty :torch
-  # then build selected set of targets with GPU-support.
-  # TODO: eventually this should converge to building the whole :torch with GPU-support
-  tools/bazel build --config=no-tty --config=gpu :c10
 else
   # check that setup.py would fail with bad arguments
   echo "The next three invocations are expected to fail with invalid command error messages."

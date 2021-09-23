@@ -11,7 +11,6 @@
 #include <torch/csrc/jit/codegen/fuser/kernel_cache.h>
 #include <torch/csrc/jit/codegen/fuser/kernel_spec.h>
 #include <torch/csrc/jit/codegen/fuser/tensor_info.h>
-#include <torch/csrc/jit/passes/graph_fuser.h>
 
 #include <algorithm>
 #include <iostream> // TODO: remove, debugging only
@@ -328,7 +327,7 @@ void launchFusion(
 
 bool runFusion(const int64_t key, Stack& stack, std::string* code_out) {
   // Short-circuits if fusion isn't enabled
-  if (!canFuseOnCPULegacy() && !canFuseOnGPU())
+  if (!canFuseOnCPU() && !canFuseOnGPU())
     return false;
 
   // Acquires the FusionSpec
@@ -363,7 +362,7 @@ bool runFusion(const int64_t key, Stack& stack, std::string* code_out) {
   // Attempts to run fallback if device fusion is disabled
   if (device.is_cuda() && !canFuseOnGPU())
     return false;
-  if (device.is_cpu() && !canFuseOnCPULegacy())
+  if (device.is_cpu() && !canFuseOnCPU())
     return false;
   if (device.is_xpu())
     return false;

@@ -378,8 +378,7 @@ Tensor CrossEntropyLossImpl::forward(
     target,
     weight,
     options.ignore_index(),
-    options.reduction(),
-    options.label_smoothing());
+    options.reduction());
 }
 
 // ============================================================================

@@ -227,8 +227,7 @@ c10::optional<std::string> findObserverName(Value* v) {
 bool isPlaceholderObserver(Value* observer) {
   if (getModuleName(observer).has_value()) {
     auto name = getModuleName(observer).value();
-    // if PlaceholderObserver is (anywhere) in name
-    if (name.find("PlaceholderObserver") != std::string::npos) {
+    if (name == "__torch__.torch.quantization.observer.PlaceholderObserver") {
       return true;
     }
   }

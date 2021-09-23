@@ -12,8 +12,6 @@ import os
 import warnings
 from typing import Optional
 
-from torch.distributed.elastic.utils.log_level import get_log_level
-
 
 def get_logger(name: Optional[str] = None):
     """
@@ -34,7 +32,7 @@ def get_logger(name: Optional[str] = None):
 
 def _setup_logger(name: Optional[str] = None):
     log = logging.getLogger(name)
-    log.setLevel(os.environ.get("LOGLEVEL", get_log_level()))
+    log.setLevel(os.environ.get("LOGLEVEL", "WARNING"))
     return log
 
 

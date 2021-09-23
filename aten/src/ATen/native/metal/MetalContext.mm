@@ -37,11 +37,17 @@ using namespace at::native::metal;
 - (BOOL)available {
 #if !defined(__APPLE__)
   return false;
+#elif TARGET_IPHONE_SIMULATOR
+  // TODO[T90135707]: Enable Metal on iOS Simulators
+  return false;
 #elif TARGET_OS_IPHONE
   if (!MPSSupportsMTLDevice(_device)) {
     return false;
   }
   if ([UIDevice currentDevice].systemVersion.floatValue < 11.0) {
+    return false;
+  }
+  if (![_device supportsFeatureSet:MTLFeatureSet_iOS_GPUFamily3_v2]) {
     return false;
   }
 #elif TARGET_OS_MAC
@@ -77,7 +83,7 @@ using namespace at::native::metal;
   }
   id<MTLFunction> func = [_library newFunctionWithName:[NSString stringWithUTF8String:kernel.c_str()]];
   TORCH_CHECK(func, "Failed to load the Metal Shader function: ", kernel);
-  NSError* errors = nil;
+  NSError* errors;
   state = [_device newComputePipelineStateWithFunction:func error:&errors];
   TORCH_CHECK(state, errors.localizedDescription.UTF8String);
   _pipelineCache[kernel] = state;
@@ -122,7 +128,7 @@ using namespace at::native::metal;
       floatArgIndex++;
     }
   }
-  NSError* errors = nil;
+  NSError* errors;
   id<MTLFunction> func = [_library newFunctionWithName:[NSString stringWithUTF8String:kernel.c_str()]
                                         constantValues:constantValues
                                                  error:&errors];

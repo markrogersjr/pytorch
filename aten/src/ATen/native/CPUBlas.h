@@ -1,7 +1,6 @@
 #pragma once
 
 #include <ATen/native/DispatchStub.h>
-#include <ATen/native/LinearAlgebraUtils.h>
 #include <c10/util/complex.h>
 #include <c10/core/ScalarType.h>
 #include <c10/core/Scalar.h>
@@ -9,6 +8,12 @@
 namespace at {
 namespace native {
 namespace cpublas {
+
+enum TransposeType {
+  Transpose,
+  NoTranspose,
+  // ConjTranspose, -- Not implemented
+};
 
 namespace internal {
 void normalize_last_dims(

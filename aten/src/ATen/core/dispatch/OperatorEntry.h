@@ -17,10 +17,6 @@
 #include <list>
 #include <array>
 
-#ifdef C10_MOBILE
-#define C10_DISPATCHER_ONE_KERNEL_PER_DISPATCH_KEY
-#endif
-
 namespace c10 {
 
 class Dispatcher;
@@ -105,13 +101,6 @@ public:
     return name_;
   }
 
-#ifdef C10_DISPATCHER_ONE_KERNEL_PER_DISPATCH_KEY
-  using AnnotatedKernelContainer = std::array<AnnotatedKernel, 1>;
-#else
-  using AnnotatedKernelContainer = std::list<AnnotatedKernel>;
-#endif
-  using AnnotatedKernelContainerIterator = AnnotatedKernelContainer::iterator;
-
   // Why are kernels and fallback asymmetric?  It has to do with ownership.
   // Kernels and the computed dispatch tables for them are canonically
   // owned by OperatorEntry, but backend fallbacks are specified once
@@ -125,7 +114,7 @@ public:
 
   // Precondition: Dispatcher::mutex_ is held
   // Postcondition: caller is responsible for disposing of the kernel
-  AnnotatedKernelContainerIterator registerKernel(
+  std::list<AnnotatedKernel>::iterator registerKernel(
     const Dispatcher& dispatcher,
     c10::optional<DispatchKey> dispatch_key,
     KernelFunction kernel,
@@ -138,7 +127,7 @@ public:
   void deregisterKernel_(
     const Dispatcher& dispatcher,
     c10::optional<DispatchKey> dispatch_key,
-    AnnotatedKernelContainerIterator kernel
+    std::list<AnnotatedKernel>::iterator kernel
   );
 
   // Precondition: Dispatcher::mutex_ is held
@@ -187,17 +176,6 @@ public:
 
   std::string listAllDispatchKeys() const;
 
-  // Returns true if kernel_ has entry for any key in ks.
-  //
-  // Invariant: There are no alias keys in the passed-in dispatch key set.
-  // Note [No Alias Keys in DispatchKeySet]
-  // Alias keys should be checked using `hasKernelForDispatchKey`
-  // Alias keys shouldn't go inside of a DispatchKeySet, since they can technically
-  // have a value > 63 (causing overflow).
-  bool hasKernelForAnyDispatchKey(DispatchKeySet ks) const;
-  // Returns true if kernel_ has entry for a particular key.
-  bool hasKernelForDispatchKey(DispatchKey k) const;
-
 private:
 
   OperatorName name_;
@@ -237,14 +215,7 @@ private:
   // re-executed and then only allow one kernel here, i.e. error if a kernel
   // is already registered, but that's a lot of effort to implement and
   // currently not high-pri.
-  ska::flat_hash_map<DispatchKey,
-#ifdef C10_DISPATCHER_ONE_KERNEL_PER_DISPATCH_KEY
-                     // On mobile, we needn't worry about Jupyter notebooks.
-                     std::array<AnnotatedKernel, 1>
-#else
-                     std::list<AnnotatedKernel>
-#endif
-                     > kernels_;
+  ska::flat_hash_map<DispatchKey, std::list<AnnotatedKernel>> kernels_;
 
   const AnnotatedKernel& missingKernel() const;
   const AnnotatedKernel& ambiguousAutogradOtherKernel() const;
@@ -277,8 +248,19 @@ private:
   void updateDispatchTable_(const c10::Dispatcher& dispatcher, DispatchKey dispatch_key);
   // Like above, but for ALL entries in the dispatch table.
   void updateDispatchTableFull_(const c10::Dispatcher& dispatcher);
+
+  // Returns true if kernel_ has entry for any key in ks.
+  //
+  // Invariant: There are no alias keys in the passed-in dispatch key set.
+  // Note [No Alias Keys in DispatchKeySet]
+  // Alias keys should be checked using `hasKernelForDispatchKey`
+  // Alias keys shouldn't go inside of a DispatchKeySet, since they can technically
+  // have a value > 63 (causing overflow).
+  bool hasKernelForAnyDispatchKey(DispatchKeySet ks) const;
+  // Returns true if kernel_ has entry for a particular key.
+  bool hasKernelForDispatchKey(DispatchKey k) const;
   // Retrieves a pointer to AnnotatedKernel at kernels_.at(dispatch_key).front().
-  const AnnotatedKernel* getKernelForDispatchKey(DispatchKey dispatch_key) const;
+  c10::optional<const AnnotatedKernel*> getKernelForDispatchKey(DispatchKey dispatch_key) const;
 };
 
 } // namespace impl

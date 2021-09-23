@@ -88,7 +88,6 @@ Indexing, Slicing, Joining, Mutating Ops
     :nosignatures:
 
     cat
-    concat
     conj
     chunk
     dsplit
@@ -397,7 +396,6 @@ Reduction Ops
     dist
     logsumexp
     mean
-    nanmean
     median
     nanmedian
     mode

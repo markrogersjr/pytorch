@@ -657,7 +657,9 @@ class DistributedDataParallelTest(
         # otherwise process will be taken down and we can't check for errors.
         os.environ["NCCL_ASYNC_ERROR_HANDLING"] = "0"
         os.environ["NCCL_BLOCKING_WAIT"] = "1"
-        timeout = timedelta(seconds=2)
+        # TODO: smaller timeout can fail since PG NCCl does health check in
+        # constructor. Look into reducing this test's runtime.
+        timeout = timedelta(seconds=15)
         store = c10d.FileStore(self.file_name, self.world_size)
         pg = c10d.ProcessGroupNCCL(store, self.rank, self.world_size, timeout=timeout)
         pg_gloo = c10d.ProcessGroupGloo(store, self.rank, self.world_size)
